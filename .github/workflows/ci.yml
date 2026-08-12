@@ -1,0 +1,77 @@
+# CI for the meta repo.
+#
+# Two jobs, not the four the service repos run: there is no application code here
+# and no image to publish. See .claude/deviations/repo-structure-standard.md for
+# why that departure is deliberate rather than an omission.
+#
+# Both jobs are cheap and deterministic, which is the point — a bad pin or a
+# malformed topology should fail on the PR, not at deploy.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: docker-compose.yml must parse and resolve
+        env:
+          # Synthetic values. `config` resolves interpolation without starting
+          # anything, and AUDIT_SIGNING_KEY uses ${VAR:?} so the file
+          # deliberately refuses to resolve without it — supplying a placeholder
+          # here checks the syntax without weakening that guard in .env.example.
+          AUDIT_SIGNING_KEY: ci-placeholder-not-a-real-key
+        run: docker compose config -q
+
+      - name: No secret may be committed in the topology
+        run: |
+          set -euo pipefail
+          # A key written into docker-compose.yml is a committed secret. Values
+          # must arrive from .env, which is gitignored. This looks for a literal
+          # assignment, not a ${VAR} reference.
+          #
+          # Anchored to the start of a YAML key. Without the anchor it also
+          # matches inside `${VAR:?message}` and `${VAR:-}`, where the character
+          # after the colon is part of the default syntax rather than a value.
+          if grep -nE '^[[:space:]]+[A-Z_]*(SIGNING_KEY|API_KEY|_TOKEN|PASSWORD|SECRET)[A-Z_]*:[[:space:]]+[^$[:space:]]' docker-compose.yml; then
+            echo "::error title=Committed secret::a key or token is assigned a literal value in docker-compose.yml."
+            echo "Secrets come from .env (gitignored). Put an empty placeholder in .env.example instead."
+            exit 1
+          fi
+          echo "No literal secrets in the topology."
+
+  pins:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Every image must be pinned to something immutable
+        run: ./scripts/verify-pins.sh
+
+      - name: Shell scripts must parse
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            bash -n "$f"
+            echo "  ok  $f"
+          done

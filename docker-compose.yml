@@ -1,0 +1,123 @@
+# biject platform topology.
+#
+# EVERY image is pinned to a full 40-character commit SHA. That is the point of
+# this file. Each service repo's CI publishes exactly one tag per merge to main —
+# ghcr.io/bijectai/<repo>:<git-sha> — and no :latest, so there is no floating tag
+# to accidentally deploy. `scripts/verify-pins.sh` enforces the rule in CI, and
+# `scripts/pin-images.sh` is how you move a pin.
+#
+# A pin is a fact about what is running. Changing one is a deploy, and it shows
+# up as a one-line diff with a commit SHA you can look up. Resist every
+# convenience that erodes that: no variable image tags, no :latest, no
+# `build:` stanzas beside an `image:`.
+#
+# Bring it up:  docker compose up -d
+# Check it:     ./scripts/smoke.sh
+
+services:
+  # ---------------------------------------------------------------------------
+  # The verification core. Everything else in this file observes it or is gated
+  # by it.
+  biject-api:
+    image: ghcr.io/bijectai/biject-api:16186258f5aa7a1fd3d65ae0404906c6a1b0e199
+    environment:
+      # Ed25519 seed (base64, 32 bytes) for the audit ledger. biject-api raises
+      # at IMPORT time when this is unset — there is no ephemeral-key fallback,
+      # by design. See README "Before first boot".
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY must be set — biject-api will not start without it}
+      ORACLE_SIGNING_KEY: ${ORACLE_SIGNING_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ARISTOTLE_API_KEY: ${ARISTOTLE_API_KEY:-}
+      LEAN_WORKER_URL: inproc://lean-pool
+      POLICY_ENV_DIR: /app/PolicyEnv
+      AUDIT_LOG_PATH: /app/policy_data/audit.log
+      REDIS_URL: redis://redis:6379
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    volumes:
+      - policy_data:/app/policy_data
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+
+  redis:
+    # Third-party images are pinned by digest rather than commit SHA — there is
+    # no commit to point at. Same principle: the tag is a label, the digest is
+    # the identity.
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The enforcement hop.
+  #
+  # Deliberately has NO depends_on for biject-api. The proxy is fail-closed: with
+  # the verifier unreachable it comes up and denies every call, which is the
+  # specified behaviour. An ordering dependency would keep it from starting
+  # exactly when you most want it up and denying — and its healthcheck probes
+  # /healthz, not /readyz, for the same reason.
+  biject-proxy:
+    image: ghcr.io/bijectai/biject-proxy:9fa255babe470b43fa5ff0bfaa0dbc6037142bd9
+    environment:
+      BIJECT_API_URL: http://biject-api:8000
+      # Empty by default: a proxy should not come up able to reach anything
+      # until someone decides what it may reach. Every forward is refused with
+      # `unknown_target` until this is set.
+      PROXY_TARGETS: ${PROXY_TARGETS:-}
+      VERIFY_TIMEOUT_MS: ${VERIFY_TIMEOUT_MS:-2000}
+      # Reported on /healthz so an operator can confirm what is actually running
+      # matches what this file pins.
+      BIJECT_IMAGE_SHA: 9fa255babe470b43fa5ff0bfaa0dbc6037142bd9
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The ledger lens. Mounted READ-ONLY: biject-api's invariant is that every
+  # append goes through its single lock-guarded path, so :ro enforces at the
+  # kernel what biject-trace promises in code.
+  biject-trace:
+    image: ghcr.io/bijectai/biject-trace:43c75f38d3f24690d9fb623d50a4e61b7c1000af
+    environment:
+      AUDIT_LOG_PATH: /app/policy_data/audit.log
+      # Public half of AUDIT_SIGNING_KEY. Unset → hash linkage is checked but
+      # signatures are not, and every response says so.
+      AUDIT_VERIFY_PUBKEY: ${AUDIT_VERIFY_PUBKEY:-}
+      BIJECT_IMAGE_SHA: 43c75f38d3f24690d9fb623d50a4e61b7c1000af
+    volumes:
+      - policy_data:/app/policy_data:ro
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The advisory lane. Outside the call path entirely — nothing is gated on it.
+  biject-judge:
+    image: ghcr.io/bijectai/biject-judge:e667f46cd9505a6ff658064d59f460bc738eb108
+    environment:
+      JUDGE_BACKEND: ${JUDGE_BACKEND:-heuristic}
+      BIJECT_IMAGE_SHA: e667f46cd9505a6ff658064d59f460bc738eb108
+    ports:
+      - "8020:8020"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The operator console. No depends_on either: nginx resolves upstreams per
+  # request, so the console comes up and reports the others as down rather than
+  # refusing to start alongside them.
+  biject-console:
+    image: ghcr.io/bijectai/biject-console:e7e0c8655f52b1fec78447d747dac5ea038df0de
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+
+volumes:
+  policy_data:

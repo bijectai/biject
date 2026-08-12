@@ -1,0 +1,24 @@
+# Code owners for biject (meta repo).
+#
+# Mirrors the ownership table in CLAUDE.md §2 — keep the two in step.
+#
+# `@bijectai/eng` is a placeholder until the org's real teams exist. Replace the
+# handles when they do; do not delete the file. An unresolvable owner silently
+# stops review from being requested, which looks exactly like "nobody had notes".
+
+*                       @bijectai/eng
+
+# The deployment topology. Every change to this file is a deploy — there is no
+# application code in this repo, so a diff here is a statement about what will
+# be running in production.
+/docker-compose.yml     @bijectai/eng
+/.env.example           @bijectai/eng
+
+# The tooling that keeps pins immutable and honest.
+/scripts/               @bijectai/eng
+/.github/               @bijectai/eng
+
+# The rules themselves. A diff that weakens a review rule should never be
+# reviewable by fewer people than the code the rule protects.
+/CLAUDE.md              @bijectai/eng
+/AGENTS.md              @bijectai/eng
