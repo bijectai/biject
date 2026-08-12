@@ -1,0 +1,268 @@
+# Automated Codex pull-request review (S4-A-00).
+#
+# Advisory only. Codex reads the diff and posts findings; it can never edit, commit,
+# or merge. That is enforced structurally, not by convention:
+#
+#   * the job that runs the model holds `contents: read` and a read-only sandbox;
+#   * the job that can write holds `pull-requests: write` only, and never checks out
+#     PR code or runs the model;
+#   * no job in this file produces a commit, and no required status check is added,
+#     so a finding can never block a merge.
+#
+# See .claude/deviations/S4-A-00.md for why this runs in Actions against the API key
+# rather than using the hosted Codex Code Review product.
+name: codex-review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  push:
+    branches: [main]
+
+# A burst of pushes cancels the in-flight review and pays for the last one only.
+# This is what makes reviewing on `synchronize` affordable.
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  gate:
+    # Kill switch: set the CODEX_REVIEW_ENABLED repo variable to anything but
+    # 'true' to stop all spend without editing this file.
+    if: vars.CODEX_REVIEW_ENABLED == 'true' && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.classify.outputs.skip || 'true' }}
+      zone: ${{ steps.classify.outputs.zone }}
+      model: ${{ steps.classify.outputs.model }}
+      effort: ${{ steps.classify.outputs.effort }}
+      base: ${{ steps.refs.outputs.base }}
+    steps:
+      # The code under review. Untrusted: everything in here is author-controlled.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: pr
+
+      - name: Resolve diff range
+        id: refs
+        working-directory: pr
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            echo "base=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Push to main. Merging a PR is also a push, and that PR was already
+          # reviewed — re-reviewing it is pure waste. Merge commits have 2+
+          # parents, so use that to tell a merge from a direct push.
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -gt 2 ]; then
+            echo "Merge commit — already reviewed as a PR. Skipping."
+            echo "base=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "base=$PUSH_BEFORE" >> "$GITHUB_OUTPUT"
+
+      # The reviewer's control plane — classify.py, the prompt template, and the
+      # AGENTS.md rules — read from the BASE commit, never from the PR. Otherwise
+      # a change could weaken the reviewer in the same diff the reviewer is judging
+      # (set skip=true, delete a rules file, rewrite the prompt). Sourcing it from
+      # base also means a broken classify.py in a PR fails loudly instead of
+      # silently disabling review.
+      - name: Check out reviewer control plane (base)
+        if: steps.refs.outputs.base != ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.refs.outputs.base }}
+          persist-credentials: false
+          path: control
+
+      - uses: actions/setup-python@v5
+        if: steps.refs.outputs.base != ''
+        with:
+          python-version: "3.12"
+
+      # This workflow file comes from the PR, but classify.py comes from base, so
+      # the two can be at different versions whenever a PR changes the script's
+      # CLI. That skew is structural — the only way to source both from base is
+      # pull_request_target, which is not acceptable when an agent reads untrusted
+      # PR content. Detect it and say so, rather than emitting an argparse dump.
+      #
+      # Deliberately fails instead of falling back to the old invocation: the
+      # missing flag is a security control, and silently degrading it is the exact
+      # failure this whole job exists to prevent.
+      - name: Preflight — control plane must understand this workflow
+        if: steps.refs.outputs.base != ''
+        run: |
+          set -euo pipefail
+          if ! python control/.github/codex/classify.py --help 2>&1 | grep -q -- '--rules-root'; then
+            echo "::error title=Control-plane skew::The base branch's classify.py predates --rules-root, so this workflow cannot invoke it."
+            cat <<'EOF'
+
+          The reviewer's control plane is read from the base branch, but this
+          workflow is read from the PR. They are out of step.
+
+          If you are landing the change that introduces --rules-root, this is
+          expected exactly once: merge this PR so base catches up, and every
+          later PR will run normally.
+
+          Otherwise, base is missing a classify.py change this workflow depends
+          on — land that first.
+          EOF
+            exit 1
+          fi
+
+      - name: Classify diff and scope rules
+        id: classify
+        if: steps.refs.outputs.base != ''
+        run: |
+          python control/.github/codex/classify.py \
+            --base "${{ steps.refs.outputs.base }}" \
+            --head HEAD \
+            --repo-root pr \
+            --rules-root control
+
+  review:
+    needs: gate
+    if: needs.gate.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read          # the ONLY permission the model-running job holds
+    steps:
+      # The code under review. Untrusted.
+      - uses: actions/checkout@v5
+        with:
+          # The merge ref is what will land on main, so it is what we review.
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          fetch-depth: 0
+          # Keep the git credential out of a workspace where a model is running.
+          persist-credentials: false
+          path: pr
+
+      # The reviewer's control plane, from base. See the gate job for why.
+      - name: Check out reviewer control plane (base)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.gate.outputs.base }}
+          persist-credentials: false
+          path: control
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Render scoped prompt
+        run: |
+          python control/.github/codex/classify.py \
+            --base "${{ needs.gate.outputs.base }}" \
+            --head HEAD \
+            --repo-root pr \
+            --rules-root control \
+            --emit-prompt "${RUNNER_TEMP}/review-prompt.md"
+
+      - name: Run Codex
+        id: codex
+        # Pinned to the commit v1 resolved to on 2026-08-11, not the mutable tag.
+        # This step is handed OPENAI_API_KEY and runs with repo contents in scope,
+        # so a retagged or compromised upstream would run attacker code with both.
+        # Re-pin deliberately when upgrading; do not float back to @v1.
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56  # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # Review the PR checkout; the control plane is only for our own scripts.
+          working-directory: pr
+          prompt-file: ${{ runner.temp }}/review-prompt.md
+          output-file: ${{ runner.temp }}/codex-output.md
+          model: ${{ needs.gate.outputs.model }}
+          effort: ${{ needs.gate.outputs.effort }}
+          # read-only is the load-bearing setting: the agent cannot modify the tree.
+          # (`permission-profile` is the newer equivalent input; migrate if `sandbox`
+          # is retired.)
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          # The action already restricts triggering to write-access authors. On a
+          # private two-collaborator repo that is sufficient; to pin it further,
+          # uncomment and list the maintainer handles:
+          # allow-users: handle-one,handle-two
+
+      - name: Upload findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-review-output
+          path: ${{ runner.temp }}/codex-output.md
+          retention-days: 14
+
+  post:
+    needs: [gate, review]
+    if: always() && needs.review.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write    # comment only; cannot push, cannot alter code
+    steps:
+      - name: Download findings
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-review-output
+          path: findings
+
+      - name: Publish to job summary
+        run: |
+          {
+            echo "## Codex review — ${{ needs.gate.outputs.zone }} zone"
+            echo "_model: \`${{ needs.gate.outputs.model }}\` · effort: ${{ needs.gate.outputs.effort }}_"
+            echo
+            cat findings/codex-output.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          # Passed through env rather than interpolated into the script body, so
+          # no workflow context can ever be parsed as JavaScript.
+          ZONE: ${{ needs.gate.outputs.zone }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- codex-review -->';
+            const body = [
+              marker,
+              `### Codex review — ${process.env.ZONE} zone`,
+              '',
+              fs.readFileSync('findings/codex-output.md', 'utf8').trim(),
+              '',
+              '---',
+              '_Advisory only — Codex cannot edit, commit, or merge. ' +
+              'Findings are suggestions for a human to accept, amend, or reject._',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            // Edit the previous review comment rather than adding another, so a
+            // PR with several rounds keeps one comment instead of a pile.
+            const existing = await github.paginate(
+              github.rest.issues.listComments, { owner, repo, issue_number }
+            );
+            const prior = existing.find(
+              c => c.user.type === 'Bot' && c.body.startsWith(marker)
+            );
+
+            if (prior) {
+              await github.rest.issues.updateComment(
+                { owner, repo, comment_id: prior.id, body }
+              );
+            } else {
+              await github.rest.issues.createComment(
+                { owner, repo, issue_number, body }
+              );
+            }

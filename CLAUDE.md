@@ -169,7 +169,45 @@ service standard does not apply — see
 2. **`pins`** — `scripts/verify-pins.sh`. Every image immutable, no `build:` stanza.
 
 
+## Automated review
+
+`.github/workflows/codex-review.yml` runs Codex over every pull request. It is copied
+from `biject-api`, which is the reference implementation, and the workflow file is
+byte-identical there and here — fix it in one, copy it to the others.
+
+It is **advisory and structurally unable to change anything**:
+
+- the job that runs the model holds `contents: read` and a read-only sandbox;
+- the job that can write holds `pull-requests: write` only, never checks out PR code,
+  and never runs the model;
+- no job produces a commit, and the check is not required, so a finding can never block
+  a merge.
+
+Two pieces are read from the **base** branch rather than the PR — `.github/codex/`
+(the classifier and the prompt template) and `AGENTS.md` (the rules). A pull request
+therefore cannot weaken the reviewer that is judging it; a rule added in a PR takes
+effect only once that PR merges.
+
+`.github/codex/classify.py` picks the model and reasoning effort from a RED/YELLOW/GREEN
+zone map, and scopes the rules to the directories the diff touches by extracting the
+`## Code Review Rules` section from every governing `AGENTS.md`. **That heading is
+load-bearing** — rename it and the reviewer silently runs with no project rules at all.
+Only the zone patterns differ between repos; the rest of the file is identical
+everywhere.
+
+Cost control: `CODEX_REVIEW_ENABLED` is a kill switch (set it to anything but `true` to
+stop all spend without editing a file), draft PRs are skipped, a burst of pushes cancels
+the in-flight review, and a diff that is only lockfiles, images, or `README.md` is
+skipped before any model call.
+
 ## Gate conditions
+
+- **Codex review is not provisioned.** `.github/workflows/codex-review.yml` stays inert
+  until the repository has the `OPENAI_API_KEY` secret and the `CODEX_REVIEW_ENABLED`
+  variable set to `true`. Both are best set at the organization level so every repo
+  picks them up at once. Note the first PR to land after enabling it may fail the gate
+  job with a "control-plane skew" error if `main` does not yet carry
+  `.github/codex/classify.py` — that is expected exactly once, and merging fixes it.
 
 - **No image has actually been published to GHCR yet.** Every service repo's `ci`
   publishes on merge to `main`; until those merges happen, the tags this file pins do not

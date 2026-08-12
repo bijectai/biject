@@ -23,7 +23,7 @@ Reserve review for the judgement a human would otherwise have to repeat.
 this repo; a diff is a statement about what will be running in production. Review it as
 you would review a deploy, not as you would review a config tweak.
 
-## Review rules
+## Code Review Rules
 
 Review every diff against **§2B.1 (verification inputs)**, **§2B.2 (enforcement
 ordering)**, and **§2B.3 (secret material)** in `CLAUDE.md`, including the "in this
