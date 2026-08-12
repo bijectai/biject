@@ -65,7 +65,7 @@ services:
   # exactly when you most want it up and denying — and its healthcheck probes
   # /healthz, not /readyz, for the same reason.
   biject-proxy:
-    image: ghcr.io/bijectai/biject-proxy:9fa255babe470b43fa5ff0bfaa0dbc6037142bd9
+    image: ghcr.io/bijectai/biject-proxy:398a456b8bf87472b89c12022fffc5e322953d27
     environment:
       BIJECT_API_URL: http://biject-api:8000
       # Empty by default: a proxy should not come up able to reach anything
@@ -75,7 +75,7 @@ services:
       VERIFY_TIMEOUT_MS: ${VERIFY_TIMEOUT_MS:-2000}
       # Reported on /healthz so an operator can confirm what is actually running
       # matches what this file pins.
-      BIJECT_IMAGE_SHA: 9fa255babe470b43fa5ff0bfaa0dbc6037142bd9
+      BIJECT_IMAGE_SHA: 398a456b8bf87472b89c12022fffc5e322953d27
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -85,13 +85,13 @@ services:
   # append goes through its single lock-guarded path, so :ro enforces at the
   # kernel what biject-trace promises in code.
   biject-trace:
-    image: ghcr.io/bijectai/biject-trace:43c75f38d3f24690d9fb623d50a4e61b7c1000af
+    image: ghcr.io/bijectai/biject-trace:0d20d65ff020ec84e88d5d51ec4f062fa408a16f
     environment:
       AUDIT_LOG_PATH: /app/policy_data/audit.log
       # Public half of AUDIT_SIGNING_KEY. Unset → hash linkage is checked but
       # signatures are not, and every response says so.
       AUDIT_VERIFY_PUBKEY: ${AUDIT_VERIFY_PUBKEY:-}
-      BIJECT_IMAGE_SHA: 43c75f38d3f24690d9fb623d50a4e61b7c1000af
+      BIJECT_IMAGE_SHA: 0d20d65ff020ec84e88d5d51ec4f062fa408a16f
     volumes:
       - policy_data:/app/policy_data:ro
     ports:
@@ -101,10 +101,10 @@ services:
   # ---------------------------------------------------------------------------
   # The advisory lane. Outside the call path entirely — nothing is gated on it.
   biject-judge:
-    image: ghcr.io/bijectai/biject-judge:e667f46cd9505a6ff658064d59f460bc738eb108
+    image: ghcr.io/bijectai/biject-judge:923b2a705381adb17dbe913f018d8f59b0c07653
     environment:
       JUDGE_BACKEND: ${JUDGE_BACKEND:-heuristic}
-      BIJECT_IMAGE_SHA: e667f46cd9505a6ff658064d59f460bc738eb108
+      BIJECT_IMAGE_SHA: 923b2a705381adb17dbe913f018d8f59b0c07653
     ports:
       - "8020:8020"
     restart: unless-stopped
@@ -114,7 +114,7 @@ services:
   # request, so the console comes up and reports the others as down rather than
   # refusing to start alongside them.
   biject-console:
-    image: ghcr.io/bijectai/biject-console:e7e0c8655f52b1fec78447d747dac5ea038df0de
+    image: ghcr.io/bijectai/biject-console:1cf4efd2b26abef712bfbf0129a49aa97d01dbc6
     ports:
       - "5173:80"
     restart: unless-stopped

@@ -50,7 +50,7 @@ exactly one tag per merge to `main` — `ghcr.io/bijectai/<repo>:<git-sha>` — 
 `:latest`, so there is no floating tag to deploy by accident.
 
 ```bash
-./scripts/pin-images.sh biject-proxy 9fa255babe470b43fa5ff0bfaa0dbc6037142bd9
+./scripts/pin-images.sh biject-proxy 398a456b8bf87472b89c12022fffc5e322953d27
 ./scripts/verify-pins.sh
 ```
 
