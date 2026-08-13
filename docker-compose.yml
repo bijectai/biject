@@ -65,7 +65,7 @@ services:
   # exactly when you most want it up and denying — and its healthcheck probes
   # /healthz, not /readyz, for the same reason.
   biject-proxy:
-    image: ghcr.io/bijectai/biject-proxy:4b8faab3c46e369a4ba80846eacec2487b606155
+    image: ghcr.io/bijectai/biject-proxy:68b73a0478ec7edf270e6eb5ae4402dc09459ff4
     environment:
       BIJECT_API_URL: http://biject-api:8000
       # Empty by default: a proxy should not come up able to reach anything
@@ -75,7 +75,7 @@ services:
       VERIFY_TIMEOUT_MS: ${VERIFY_TIMEOUT_MS:-2000}
       # Reported on /healthz so an operator can confirm what is actually running
       # matches what this file pins.
-      BIJECT_IMAGE_SHA: 4b8faab3c46e369a4ba80846eacec2487b606155
+      BIJECT_IMAGE_SHA: 68b73a0478ec7edf270e6eb5ae4402dc09459ff4
     ports:
       - "8080:8080"
     restart: unless-stopped
