@@ -1,0 +1,82 @@
+# =============================================================================
+# Traefik v3 STATIC configuration (template) — S4-D-10
+# =============================================================================
+# This file is mounted read-only into the traefik container as
+# /etc/traefik/traefik.template.yml and rendered at container start by the
+# entrypoint in ../docker-compose.yml:
+#
+#     sed "s|__ACME_EMAIL__|$ACME_EMAIL|g" template > /tmp/traefik.yml
+#
+# Why a template? Traefik does NOT merge static configuration across sources
+# (file vs CLI vs env) — whichever single source it finds wins. So we cannot
+# keep this file AND inject the ACME email via a flag/env var; the placeholder
+# below is substituted from .env (ACME_EMAIL) at startup instead. Everything
+# else in this file is non-secret and safe to commit.
+#
+# Dynamic configuration (middlewares, TLS options) lives in ./dynamic/ via the
+# file provider, plus per-service docker labels via the docker provider.
+# =============================================================================
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# Dashboard/API disabled — per ticket, and because this is an internet-facing
+# demo box. Do not enable `insecure: true` under any circumstances.
+api:
+  dashboard: false
+  insecure: false
+
+log:
+  level: INFO
+
+# Access log to stdout -> `docker logs traefik` / Coolify log viewer.
+accessLog: {}
+
+entryPoints:
+  # :80 exists only for the ACME HTTP-01 challenge (Traefik answers it
+  # internally before the redirect applies) and to bounce humans to HTTPS.
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    # SECURITY (per ticket): nothing is routed unless it opts in with
+    # `traefik.enable=true`. This is what keeps random containers (and the OC
+    # SOAP endpoint) from being accidentally exposed.
+    exposedByDefault: false
+    # Default network Traefik uses to reach discovered containers. Containers
+    # on other networks (e.g. the OC UI on biject-edc-internal) must override
+    # this per-container with the `traefik.docker.network` label.
+    network: biject-edge
+
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  # HTTP-01 challenge: requires DEMO_DOMAIN's A record (Namecheap DNS, managed
+  # elsewhere) to already point at this host, and port 80 reachable.
+  letsencrypt:
+    acme:
+      # Rendered from ACME_EMAIL in .env at container start — see header.
+      email: "__ACME_EMAIL__"
+      # Persisted in the biject-traefik-acme named volume; losing it means
+      # re-issuing every cert and burning LE rate limits.
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+      # While iterating on DNS/compose, uncomment the staging CA to avoid the
+      # production rate limit (5 duplicate certs/week), then remove it AND
+      # wipe the acme volume to switch back to production certs:
+      # caServer: https://acme-staging-v02.api.letsencrypt.org/directory

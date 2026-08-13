@@ -32,11 +32,11 @@ set -euo pipefail
 # ----------------------------------------------------------------------------
 # Parameters — single source of truth for this script. Override via env.
 # ----------------------------------------------------------------------------
-EDGE_SUBNET="${EDGE_SUBNET:-172.28.0.0/24}"     # compose network "edge" (agent + proxy)
-EDC_SUBNET="${EDC_SUBNET:-172.29.0.0/24}"       # compose network "edc_internal" (OC + Postgres + proxy)
-PROXY_EDGE_IP="${PROXY_EDGE_IP:-172.28.0.10}"   # proxy static IP on edge
-PROXY_EDC_IP="${PROXY_EDC_IP:-172.29.0.10}"     # proxy static IP on edc_internal
-AGENT_IP="${AGENT_IP:-172.28.0.20}"             # agent container static IP on edge
+EDGE_SUBNET="${EDGE_SUBNET:-172.28.99.0/24}"     # compose network "edge" (agent + proxy)
+EDC_SUBNET="${EDC_SUBNET:-172.28.100.0/24}"       # compose network "edc_internal" (OC + Postgres + proxy)
+PROXY_EDGE_IP="${PROXY_EDGE_IP:-172.28.99.10}"   # proxy static IP on edge
+PROXY_EDC_IP="${PROXY_EDC_IP:-172.28.100.10}"     # proxy static IP on edc_internal
+AGENT_IP="${AGENT_IP:-172.28.99.20}"             # agent container static IP on edge
 OC_HTTP_PORT="${OC_HTTP_PORT:-8080}"            # OpenClinica (Tomcat)
 PG_PORT="${PG_PORT:-5432}"                      # Postgres
 PROXY_PORT="${PROXY_PORT:-8443}"                # verification proxy listener

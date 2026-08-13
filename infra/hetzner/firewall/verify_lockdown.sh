@@ -26,9 +26,9 @@
 # =============================================================================
 set -u  # NOT -e: we *expect* command failures in the negative probe.
 
-OC_DIRECT_URL="${OC_DIRECT_URL:-http://172.29.0.30:8080/OpenClinica/}"  # OC on edc_internal — must be UNREACHABLE from here
-PG_DIRECT_HOSTPORT="${PG_DIRECT_HOSTPORT:-172.29.0.40:5432}"            # Postgres on edc_internal — must be UNREACHABLE too
-PROXY_HEALTH_URL="${PROXY_HEALTH_URL:-https://172.28.0.10:8443/health}" # proxy health — must be REACHABLE
+OC_DIRECT_URL="${OC_DIRECT_URL:-http://172.28.100.30:8080/OpenClinica/}"  # OC on edc_internal — must be UNREACHABLE from here
+PG_DIRECT_HOSTPORT="${PG_DIRECT_HOSTPORT:-172.28.100.40:5432}"            # Postgres on edc_internal — must be UNREACHABLE too
+PROXY_HEALTH_URL="${PROXY_HEALTH_URL:-https://172.28.99.10:8443/health}" # proxy health — must be REACHABLE
 CURL_TIMEOUT="${CURL_TIMEOUT:-5}"                                       # short: a DROP manifests as a timeout
 CURL_EXTRA_ARGS="${CURL_EXTRA_ARGS:-}"                                  # e.g. --cacert /etc/biject/proxy-ca.pem
 

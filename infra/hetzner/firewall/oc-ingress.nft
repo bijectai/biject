@@ -32,11 +32,11 @@
 # =============================================================================
 
 # --- addressing (compose: networks edge + edc_internal) ----------------------
-define EDGE_SUBNET      = 172.28.0.0/24   # docker network "edge" (agent + proxy)
-define EDC_SUBNET       = 172.29.0.0/24   # docker network "edc_internal" (OC + Postgres + proxy)
-define PROXY_EDGE_IP    = 172.28.0.10     # proxy's static IP on "edge"
-define PROXY_EDC_IP     = 172.29.0.10     # proxy's static IP on "edc_internal"
-define AGENT_IP         = 172.28.0.20     # agent container/host IP on "edge"
+define EDGE_SUBNET      = 172.28.99.0/24   # docker network "edge" (agent + proxy)
+define EDC_SUBNET       = 172.28.100.0/24   # docker network "edc_internal" (OC + Postgres + proxy)
+define PROXY_EDGE_IP    = 172.28.99.10     # proxy's static IP on "edge"
+define PROXY_EDC_IP     = 172.28.100.10     # proxy's static IP on "edc_internal"
+define AGENT_IP         = 172.28.99.20     # agent container/host IP on "edge"
 
 # --- service ports -----------------------------------------------------------
 define OC_HTTP_PORT     = 8080            # OpenClinica (Tomcat) HTTP

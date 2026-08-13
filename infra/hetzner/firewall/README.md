@@ -25,8 +25,8 @@ adds ergonomics, not enforcement, in this topology (see
 
 ```
  networks:
-   edge          172.28.0.0/24   agent (.20)  <->  proxy (.10)
-   edc_internal  172.29.0.0/24   proxy (.10)  <->  OC (.30), Postgres (.40)
+   edge          172.28.99.0/24   agent (.20)  <->  proxy (.10)
+   edc_internal  172.28.100.0/24   proxy (.10)  <->  OC (.30), Postgres (.40)
                  (internal: true — no host-published ports)
 ```
 
