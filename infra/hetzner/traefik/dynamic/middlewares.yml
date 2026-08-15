@@ -1,0 +1,38 @@
+# =============================================================================
+# Traefik DYNAMIC configuration (file provider, hot-reloaded) — S4-D-10
+# =============================================================================
+# Shared middlewares + TLS options referenced from docker labels as
+# `<name>@file` (e.g. `security-headers@file`). Per-service secrets-bearing
+# middlewares (like the OC UI basic-auth, whose users come from .env) are
+# defined via docker labels in the compose files instead, because this static
+# file cannot see compose's .env interpolation.
+# =============================================================================
+
+http:
+  middlewares:
+    # Baseline hardening for every internet-facing router in the demo.
+    security-headers:
+      headers:
+        stsSeconds: 31536000            # HSTS: 1 year
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        frameDeny: true
+        browserXssFilter: true
+        referrerPolicy: "no-referrer-when-downgrade"
+
+    # Utility "block everything" middleware: an allow-list containing only a
+    # non-routable address yields 403 for all real clients. Attach it to a
+    # high-priority router if you ever need to hard-mask a path at the edge
+    # (belt-and-braces on top of the !PathPrefix exclusion used for
+    # /OpenClinica-ws — see openclinica/docker-compose.openclinica.yml).
+    deny-all:
+      ipAllowList:
+        sourceRange:
+          - "255.255.255.255/32"
+
+tls:
+  options:
+    # Applied by default to all TLS routers on this entrypoint set.
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true

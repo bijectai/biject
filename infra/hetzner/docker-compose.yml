@@ -1,0 +1,217 @@
+# =============================================================================
+# S4-D-10 — biject sprint demo: host/edge compose skeleton (Hetzner + Coolify)
+# =============================================================================
+# Deployment mode: Coolify **Raw Compose Deployment**, pointed at this file.
+#
+#   !! Raw Compose mode is REQUIRED, not a preference !!
+#   Coolify's "Application" (build-pack) mode rewrites the compose file and
+#   SILENTLY STRIPS the `ipam` block from top-level `networks:` definitions.
+#   We rely on a pinned subnet for `edc_internal` (stable addressing for the
+#   verify proxy / firewalling), so this stack must be deployed as Raw Compose,
+#   where Coolify applies the file as-is.
+#
+# Secrets & parameters come from an uncommitted `.env` file next to this file.
+# Copy `.env.example` -> `.env` and fill in real values (Coolify Raw Compose
+# also lets you manage these as "Environment Variables" on the resource —
+# either way, NO real secrets are ever committed).
+#
+# -----------------------------------------------------------------------------
+# NETWORK TOPOLOGY = THE ENFORCEMENT BOUNDARY
+# -----------------------------------------------------------------------------
+#
+#   internet ──▶ traefik(:80/:443) ──edge──▶ biject-api, (proxy public side)
+#                     │
+#                     └────edc_internal────▶ openclinica UI  (basic-auth'd, UI only)
+#
+#   agent / biject-api ──edge──▶ proxy ──edc_internal──▶ OpenClinica SOAP (ws)
+#
+# Two networks:
+#   * `edge`         — Traefik-facing. Anything that may receive traffic from
+#                      Traefik or talk to the internet lives here.
+#   * `edc_internal` — `internal: true`. OpenClinica and its Postgres live ONLY
+#                      here (see openclinica/docker-compose.openclinica.yml).
+#                      No host ports, no outbound internet, and no container
+#                      outside this network can open a socket to OC or its DB.
+#
+# The Rust verify proxy is the ONLY application-layer bridge between the two
+# networks: it joins BOTH `edge` and `edc_internal`. Every agent write to the
+# EDC therefore MUST traverse the proxy — that is the enforcement boundary,
+# implemented at the Docker network layer, not by convention.
+#
+# Deliberate, documented exception: Traefik is also attached to `edc_internal`
+# so humans can browse the OpenClinica UI during the demo (behind basic-auth).
+# Traefik routes ONLY the UI path; the SOAP web-services path (/OpenClinica-ws)
+# is excluded from the Traefik router (see labels in the OC compose file), so
+# the write API remains reachable exclusively from the proxy. If you don't need
+# the UI browsable, remove `edc_internal` from traefik's networks below and the
+# boundary becomes absolute.
+#
+# -----------------------------------------------------------------------------
+# WHERE IS OPENCLINICA? (S4-D-11 integration choice — documented decision)
+# -----------------------------------------------------------------------------
+# The OpenClinica stack lives in its own compose project:
+#     ./openclinica/docker-compose.openclinica.yml
+# and attaches to the two networks below via `external: true` + fixed `name:`s.
+# We deliberately did NOT merge it into this file, and did NOT use compose
+# `include:` / multi-`-f` merging, because:
+#   * Coolify Raw Compose points at exactly one file; a second Raw Compose
+#     resource (or a manual `docker compose up` for the demo) handles OC.
+#   * Separate lifecycles: OC (stateful, slow to init its DB on first boot)
+#     can be restarted/rebuilt without bouncing Traefik/proxy, and vice versa.
+#   * `include:`/`-f` merge semantics around duplicate/external network
+#     definitions differ across compose versions; external-by-fixed-name is
+#     unambiguous everywhere.
+# Startup order: bring THIS stack up first (it creates the networks), then the
+# OpenClinica stack. See openclinica/README.md.
+# =============================================================================
+
+networks:
+  # Traefik-facing network. Fixed name so the OpenClinica compose project (and
+  # any other sibling project) can attach with `external: true`.
+  edge:
+    name: biject-edge
+    driver: bridge
+    # Pinned subnet so the firewall scripts (infra/hetzner/firewall/) can
+    # reference stable addresses. Same Coolify Raw-Compose caveat as below.
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.99.0/24
+
+  # The EDC enclave. `internal: true` => Docker attaches no default route /
+  # masquerade: members cannot reach the internet and nothing can reach them
+  # except other members. OC + Postgres live only here; the proxy (and Traefik,
+  # UI-only — see header) are the only other members.
+  edc_internal:
+    name: biject-edc-internal
+    driver: bridge
+    internal: true
+    # Pinned subnet so the proxy/OC get stable addressing (useful for proxy
+    # allowlists and debugging). NOTE: Coolify "Application" mode silently
+    # strips this ipam block — one of the reasons this stack must be deployed
+    # in Raw Compose mode (see header).
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.100.0/24
+
+volumes:
+  # Let's Encrypt account + issued certs. Must persist across restarts or you
+  # will hit LE rate limits re-issuing on every deploy.
+  traefik_acme:
+    name: biject-traefik-acme
+
+services:
+  # ===========================================================================
+  # traefik — the only component with published host ports (80/443).
+  # v3.x: we use v3 rule syntax (incl. `!PathPrefix(...)` negation, which the
+  # OC UI router in the openclinica compose file depends on — do NOT downgrade
+  # to v2 without rewriting that rule).
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    ports:
+      - "80:80"    # HTTP  — ACME HTTP-01 challenge + permanent redirect to 443
+      - "443:443"  # HTTPS — everything else
+    networks:
+      - edge
+      # UI-only exception: lets Traefik route the OC web UI (basic-auth'd).
+      # Remove this line to make the EDC enclave reachable ONLY via the proxy.
+      - edc_internal
+    environment:
+      # Interpolated by compose from ./.env (or Coolify env vars). `:?` makes
+      # `docker compose up` fail loudly instead of booting with a blank email.
+      - ACME_EMAIL=${ACME_EMAIL:?set ACME_EMAIL in .env (see .env.example)}
+    volumes:
+      # Read-only Docker socket for service discovery (exposedByDefault=false,
+      # so only explicitly labeled containers are ever routed).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Static config TEMPLATE (see entrypoint note below).
+      - ./traefik/traefik.yml:/etc/traefik/traefik.template.yml:ro
+      # Dynamic config (middlewares, TLS options) — file provider, hot-reloaded.
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/letsencrypt
+    # Traefik does NOT merge static config from file + env, so the ACME email
+    # cannot live in traefik.yml as an env reference. Instead the committed
+    # traefik.yml carries an __ACME_EMAIL__ placeholder and we render it at
+    # container start (keeps the email in .env, out of the repo). `$${...}` is
+    # compose-escaping: the variable is expanded by the container shell at
+    # runtime from the environment above, not at compose-parse time.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed "s|__ACME_EMAIL__|$${ACME_EMAIL}|g" /etc/traefik/traefik.template.yml > /tmp/traefik.yml
+        exec traefik --configFile=/tmp/traefik.yml
+    labels:
+      # Traefik itself exposes nothing (dashboard disabled in traefik.yml);
+      # keep it out of its own discovery explicitly.
+      - "traefik.enable=false"
+
+  # ===========================================================================
+  # proxy — Rust verification proxy (BUILT BY ANOTHER DEV — placeholder only).
+  # Uncomment and fill in the image once the proxy repo publishes one.
+  #
+  # This is the ONLY component allowed on BOTH networks with reach into the
+  # EDC's SOAP endpoint. All agent writes to OpenClinica MUST go through it:
+  #   agent -> https://${DEMO_DOMAIN}/verify (edge, via Traefik)
+  #         -> proxy:8443 (verifies the write)
+  #         -> http://openclinica:8080/OpenClinica-ws/... (edc_internal)
+  # ===========================================================================
+  # proxy:
+  #   image: REPLACE_ME/biject-verify-proxy:latest   # provided by the proxy dev
+  #   restart: unless-stopped
+  #   networks:
+  #     - edge          # receives verified-write requests from Traefik/agent
+  #     - edc_internal  # the ONLY sanctioned route into the OC SOAP endpoint
+  #   environment:
+  #     # OC SOAP base URL as seen from inside edc_internal (service name from
+  #     # openclinica/docker-compose.openclinica.yml):
+  #     - OC_WS_BASE_URL=http://openclinica:8080/OpenClinica-ws
+  #     - OC_WS_USER=${OC_WS_USER:-}
+  #     - OC_WS_PASSWORD=${OC_WS_PASSWORD:-}
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.docker.network=biject-edge"
+  #     - "traefik.http.routers.verify-proxy.rule=Host(`${DEMO_DOMAIN}`) && PathPrefix(`/verify`)"
+  #     - "traefik.http.routers.verify-proxy.entrypoints=websecure"
+  #     - "traefik.http.routers.verify-proxy.tls.certresolver=letsencrypt"
+  #     - "traefik.http.routers.verify-proxy.middlewares=security-headers@file"
+  #     - "traefik.http.services.verify-proxy.loadbalancer.server.port=8443"
+  #     # If the proxy terminates its own TLS on 8443, tell Traefik to speak
+  #     # HTTPS to it:
+  #     # - "traefik.http.services.verify-proxy.loadbalancer.serverstransport=insecure-selfsigned@file"
+
+  # ===========================================================================
+  # biject-api — FastAPI backend hosting the OpenAI Agents SDK agent
+  # (placeholder — wire in once the backend image exists).
+  # NOTE: edge ONLY. It has no route to OpenClinica; its writes go through the
+  # proxy. That is the point of the whole exercise — do not add edc_internal.
+  # ===========================================================================
+  # biject-api:
+  #   image: REPLACE_ME/biject-api:latest
+  #   restart: unless-stopped
+  #   networks:
+  #     - edge
+  #   environment:
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+  #     - VERIFY_PROXY_URL=http://proxy:8443     # writes go here, never to OC
+  #     - DEMO_DOMAIN=${DEMO_DOMAIN}
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.docker.network=biject-edge"
+  #     - "traefik.http.routers.biject-api.rule=Host(`${DEMO_DOMAIN}`) && PathPrefix(`/api`)"
+  #     - "traefik.http.routers.biject-api.entrypoints=websecure"
+  #     - "traefik.http.routers.biject-api.tls.certresolver=letsencrypt"
+  #     - "traefik.http.routers.biject-api.middlewares=security-headers@file"
+  #     - "traefik.http.services.biject-api.loadbalancer.server.port=8000"
+
+  # ===========================================================================
+  # OpenClinica 3.17 CE + Postgres 9.5 — NOT defined here (documented above):
+  # deployed as a sibling compose project from
+  #   ./openclinica/docker-compose.openclinica.yml
+  # which attaches to `biject-edge` / `biject-edc-internal` as external
+  # networks. Bring this stack up first, then:
+  #   cd openclinica && docker compose --env-file ../.env \
+  #       -f docker-compose.openclinica.yml up -d --build
+  # ===========================================================================

@@ -1,0 +1,4 @@
+# edc/ tooling dependencies (S4-D-12 / S4-D-20).
+# Python 3.11+, stdlib + these two only.
+requests>=2.31
+lxml>=4.9

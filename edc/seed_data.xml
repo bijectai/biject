@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  seed_data.xml (S4-D-20) - ODM 1.3 ClinicalData for 8 synthetic subjects
+  (SS_001..SS_008) in study S_BJTDEMO / event SE_VISIT1.
+
+  ALL DATA IN THIS FILE IS 100% SYNTHETIC. There are no real patients, no
+  real PHI, and no real clinical measurements here - every value was invented
+  for the biject clinical-trial demo.
+
+  This dataset is DELIBERATELY MESSY. Four problems are planted across three
+  distinct query types:
+    1. Out-of-range value / decimal-shift typo   (SS_002 creatinine,
+                                                  SS_007 hemoglobin)
+    2. Cross-field mismatch                       (SS_004 weight vs BMI+height)
+    3. Incomplete CRF / missing value             (SS_006 diastolic BP)
+
+  RESOLVABILITY CONTRACT: every planted error is resolvable from OTHER fields
+  seeded in this same dataset (source-note transcriptions, BMI+height, the
+  composite BP reading). The demo agent derives each correction from seeded
+  source data; it never has to invent a value. An XML comment directly above
+  each planted error states (a) the error, (b) the query it should raise, and
+  (c) the resolution source field.
+
+  Subjects SS_001, SS_003, SS_005, SS_008 are clean controls (internally
+  consistent, in-range) so the agent's "no action needed" path is exercised
+  too. All OIDs match edc/study_def.xml exactly.
+
+  Import mechanics: seed.py pushes this through the OpenClinica-ws SOAP
+  importData operation subject-by-subject (comments are stripped before
+  sending). UpsertOn + TransactionType="Insert" perform initial data entry;
+  RangeChecks in study_def.xml are Soft, so out-of-range values land AND flag.
+-->
+<ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"
+     xmlns:OpenClinica="http://www.openclinica.org/ns/odm_ext_v130/v3.1"
+     FileType="Transactional"
+     FileOID="BJT-DEMO-01-SEED-DATA"
+     Description="BJT-DEMO-01 synthetic seed data (deliberately messy)"
+     CreationDateTime="2026-08-13T00:00:00"
+     ODMVersion="1.3">
+  <ClinicalData StudyOID="S_BJTDEMO" MetaDataVersionOID="v1.0.0">
+    <!-- Allow import regardless of the event/CRF workflow state. -->
+    <OpenClinica:UpsertOn NotStarted="true" DataEntryStarted="true"
+                          DataEntryComplete="true"/>
+
+    <!-- ================= SS_001 : clean control ========================= -->
+    <SubjectData SubjectKey="SS_001">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="122"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="78"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="70"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="72.4"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="175"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="23.6"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 122/78, HR 70, weight 72.4 kg, height 175 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="14.1"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="6.2"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="0.94"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-10"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-10: Hgb 14.1 g/dL; WBC 6.2; creatinine 0.94 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_002 : PLANTED ERROR ========================= -->
+    <SubjectData SubjectKey="SS_002">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="130"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="84"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="76"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="81.0"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="180"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="25.0"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 130/84, HR 76, weight 81.0 kg, height 180 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="13.8"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="7.4"/>
+            <!-- PLANTED ERROR (type 1: out-of-range / decimal-shift typo).
+                 ERROR: creatinine entered as 15.2 mg/dL - a decimal shift of
+                   the true value; exceeds the RangeCheck upper bound (10).
+                 EXPECTED QUERY: soft range-check discrepancy note on
+                   I_LABS_CREAT ("Creatinine above plausible range").
+                 RESOLUTION SOURCE: sibling field I_LABS_SOURCE_NOTE in this
+                   same item group carries the central-lab transcription
+                   "creatinine 1.52 mg/dL" -> correct value is 1.52. -->
+            <ItemData ItemOID="I_LABS_CREAT" Value="15.2"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-10"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-10: Hgb 13.8 g/dL; WBC 7.4; creatinine 1.52 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_003 : clean control ========================= -->
+    <SubjectData SubjectKey="SS_003">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="118"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="72"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="64"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="64.8"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="162"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="24.7"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 118/72, HR 64, weight 64.8 kg, height 162 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="12.9"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="5.1"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="0.81"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-10"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-10: Hgb 12.9 g/dL; WBC 5.1; creatinine 0.81 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_004 : PLANTED ERROR ========================= -->
+    <SubjectData SubjectKey="SS_004">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="134"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="88"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="80"/>
+            <!-- PLANTED ERROR (type 2: cross-field mismatch).
+                 ERROR: weight entered as 8.5 kg on an adult - inconsistent
+                   with height 178 cm and site-calculated BMI 26.9 (and below
+                   the 30-250 kg RangeCheck, so it also flags).
+                 EXPECTED QUERY: discrepancy note on I_VITALS_WEIGHT (range/
+                   consistency: "weight implausible for adult subject").
+                 RESOLUTION SOURCE: sibling fields in this same item group -
+                   I_VITALS_BMI (26.9) and I_VITALS_HEIGHT (178 cm) give
+                   weight = BMI * (height_m)^2 = 26.9 * 1.78^2 = 85.2 kg;
+                   corroborated by I_VITALS_NOTE "scale reading 85.2 kg".
+                   Correct value is 85.2 (decimal-point slip at entry). -->
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="8.5"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="178"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="26.9"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 134/88, HR 80. Scale reading 85.2 kg; height 178 cm; BMI calculated 26.9."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="15.0"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="8.0"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="1.05"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-10"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-10: Hgb 15.0 g/dL; WBC 8.0; creatinine 1.05 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_005 : clean control ========================= -->
+    <SubjectData SubjectKey="SS_005">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="140"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="90"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="82"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="90.3"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="183"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="27.0"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 140/90, HR 82, weight 90.3 kg, height 183 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="14.6"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="9.3"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="1.10"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-11"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-11: Hgb 14.6 g/dL; WBC 9.3; creatinine 1.10 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_006 : PLANTED ERROR ========================= -->
+    <SubjectData SubjectKey="SS_006">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="128"/>
+            <!-- PLANTED ERROR (type 3: incomplete CRF / missing value).
+                 ERROR: diastolic BP was never entered - I_VITALS_DBP is
+                   deliberately ABSENT from this item group although the CRF
+                   marks it Mandatory (SBP alone was transcribed).
+                 EXPECTED QUERY: missing-data / incomplete-CRF discrepancy
+                   note on I_VITALS_DBP for SS_006.
+                 RESOLUTION SOURCE: sibling field I_VITALS_NOTE carries the
+                   full paper-chart reading "BP 128/82 mmHg seated" -> the
+                   missing diastolic value is 82 (and the seeded SBP 128
+                   matches the same source reading, confirming provenance). -->
+            <ItemData ItemOID="I_VITALS_HR" Value="74"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="77.5"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="172"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="26.2"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Paper chart: BP 128/82 mmHg seated; HR 74; weight 77.5 kg; height 172 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="13.2"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="6.8"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="0.88"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-11"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-11: Hgb 13.2 g/dL; WBC 6.8; creatinine 0.88 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_007 : PLANTED ERROR ========================= -->
+    <SubjectData SubjectKey="SS_007">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="116"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="70"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="68"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="58.9"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="160"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="23.0"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 116/70, HR 68, weight 58.9 kg, height 160 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <!-- PLANTED ERROR (type 1 again: out-of-range / decimal-shift,
+                 second instance so the agent handles the pattern twice).
+                 ERROR: hemoglobin entered as 125 g/dL - unit/decimal slip;
+                   exceeds the RangeCheck upper bound (20).
+                 EXPECTED QUERY: soft range-check discrepancy note on
+                   I_LABS_HGB ("Hemoglobin above plausible range").
+                 RESOLUTION SOURCE: sibling field I_LABS_SOURCE_NOTE carries
+                   "hemoglobin 12.5 g/dL" -> correct value is 12.5. -->
+            <ItemData ItemOID="I_LABS_HGB" Value="125"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="4.9"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="0.76"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-11"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-11: hemoglobin 12.5 g/dL; WBC 4.9; creatinine 0.76 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+
+    <!-- ================= SS_008 : clean control ========================= -->
+    <SubjectData SubjectKey="SS_008">
+      <StudyEventData StudyEventOID="SE_VISIT1">
+        <FormData FormOID="F_VITALS">
+          <ItemGroupData ItemGroupOID="IG_VITALS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_VITALS_SBP" Value="124"/>
+            <ItemData ItemOID="I_VITALS_DBP" Value="80"/>
+            <ItemData ItemOID="I_VITALS_HR" Value="72"/>
+            <ItemData ItemOID="I_VITALS_WEIGHT" Value="70.1"/>
+            <ItemData ItemOID="I_VITALS_HEIGHT" Value="169"/>
+            <ItemData ItemOID="I_VITALS_BMI" Value="24.5"/>
+            <ItemData ItemOID="I_VITALS_NOTE"
+                      Value="Chart: BP 124/80, HR 72, weight 70.1 kg, height 169 cm."/>
+          </ItemGroupData>
+        </FormData>
+        <FormData FormOID="F_LABS">
+          <ItemGroupData ItemGroupOID="IG_LABS" ItemGroupRepeatKey="1"
+                         TransactionType="Insert">
+            <ItemData ItemOID="I_LABS_HGB" Value="13.9"/>
+            <ItemData ItemOID="I_LABS_WBC" Value="7.1"/>
+            <ItemData ItemOID="I_LABS_CREAT" Value="0.97"/>
+            <ItemData ItemOID="I_LABS_COLLDATE" Value="2026-08-11"/>
+            <ItemData ItemOID="I_LABS_SOURCE_NOTE"
+                      Value="Central lab report 2026-08-11: Hgb 13.9 g/dL; WBC 7.1; creatinine 0.97 mg/dL."/>
+          </ItemGroupData>
+        </FormData>
+      </StudyEventData>
+    </SubjectData>
+  </ClinicalData>
+</ODM>
