@@ -42,8 +42,10 @@ Check items off in this file as you go; log any fallback decisions in
       Do not let this cross into Day 2.
 
 ### 5. S4-D-13 — already verified in-repo
-- [x] `cd PolicyEnv && lake build` — compiles, `Decidable`, 13 regression
-      vectors, zero axioms (see `.claude/deviations/S4-D-13.md`)
+- [x] `cd PolicyEnv && lake build` — compiles, `Decidable`, compile-time
+      regression vectors (18 as of the S4-D-30 hardening), zero axioms (see
+      `.claude/deviations/S4-D-13.md` and `.claude/deviations/S4-D-30.md`;
+      S4-D-30 also added `scripts/audit_bound_harness.py`, which must pass)
 - [ ] Optional on host: re-run `lake build` to confirm toolchain pin resolves
 
 ## Day 2
