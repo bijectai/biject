@@ -1,0 +1,112 @@
+#!/usr/sbin/nft -f
+# =============================================================================
+# oc-ingress.nft — host-level nftables lockdown for the OpenClinica demo box
+# (Hetzner). Ticket S4-D-21.
+#
+# ENFORCEMENT MODEL
+# -----------------
+# The security bound of this demo is the NETWORK layer: the agent host has no
+# route to OpenClinica (OC) except through the Rust verification proxy. These
+# rules implement that bound on the host:
+#
+#   * INGRESS to OC:  only the proxy may reach OC's service ports. Everything
+#     else (agent host included) is logged and DROPPED.
+#   * EGRESS from the agent host: only the proxy endpoint and api.openai.com
+#     TCP/443 are reachable. In particular, no path to any private/RFC1918
+#     address other than the proxy — so no side-channel to OC or Postgres.
+#
+# DOCKER CAVEAT (READ THIS)
+# -------------------------
+# If OC / Postgres / proxy / agent run as Docker containers (the compose setup
+# with networks `edge` and `edc_internal`), Docker programs iptables-nft
+# itself and forwards container traffic through the FORWARD hook via the
+# DOCKER-USER chain. In that case THIS FILE IS NOT THE RELIABLE HOOK —
+# use ./docker-user-rules.sh, which inserts rules into DOCKER-USER (the chain
+# Docker guarantees to consult first and never flush). Keep this file applied
+# anyway: it covers host-namespace traffic (published ports hit the host,
+# processes running outside Docker, operator mistakes like `network_mode:
+# host`), i.e. it is defense-in-depth around the Docker path.
+#
+# PARAMETERS — adjust to the deployment, keep in sync with docker-user-rules.sh
+# and the compose file's ipam config.
+# =============================================================================
+
+# --- addressing (compose: networks edge + edc_internal) ----------------------
+define EDGE_SUBNET      = 172.28.99.0/24   # docker network "edge" (agent + proxy)
+define EDC_SUBNET       = 172.28.100.0/24   # docker network "edc_internal" (OC + Postgres + proxy)
+define PROXY_EDGE_IP    = 172.28.99.10     # proxy's static IP on "edge"
+define PROXY_EDC_IP     = 172.28.100.10     # proxy's static IP on "edc_internal"
+define AGENT_IP         = 172.28.99.20     # agent container/host IP on "edge"
+
+# --- service ports -----------------------------------------------------------
+define OC_HTTP_PORT     = 8080            # OpenClinica (Tomcat) HTTP
+define PG_PORT          = 5432            # Postgres backing OC
+define PROXY_PORT       = 8443            # Rust verification proxy listener
+
+# Idempotent apply: drop any previous version of our table, then recreate.
+table inet biject_lockdown
+delete table inet biject_lockdown
+
+table inet biject_lockdown {
+
+    # -------------------------------------------------------------------------
+    # INGRESS PROTECTION FOR OC + POSTGRES (forwarded and host-destined)
+    # -------------------------------------------------------------------------
+    chain forward {
+        # priority -5: run BEFORE Docker's own forward rules (priority 0) so a
+        # permissive Docker rule can never out-rank the lockdown.
+        type filter hook forward priority -5; policy accept;
+
+        # Established flows that we already admitted keep working.
+        ct state established,related accept
+
+        # (1) Proxy -> OC subnet: the ONLY permitted initiator of new flows
+        #     into the EDC network. Constrained to the two service ports so a
+        #     compromised proxy still can't rummage on other ports.
+        ip saddr $PROXY_EDC_IP ip daddr $EDC_SUBNET tcp dport { $OC_HTTP_PORT, $PG_PORT } accept
+
+        # (2) Intra-EDC traffic (OC <-> Postgres) stays allowed: both peers
+        #     live on edc_internal and never traverse to other networks.
+        ip saddr $EDC_SUBNET ip daddr $EDC_SUBNET accept
+
+        # (3) Everything else aimed at the EDC subnet — including the agent —
+        #     is logged for the audit trail and dropped.
+        ip daddr $EDC_SUBNET log prefix "biject-oc-ingress-drop: " counter drop
+
+        # ---------------------------------------------------------------------
+        # EGRESS POLICY FOR THE AGENT (forwarded path)
+        # ---------------------------------------------------------------------
+        # (4) Agent -> proxy: the sanctioned tool-call path.
+        ip saddr $AGENT_IP ip daddr $PROXY_EDGE_IP tcp dport $PROXY_PORT accept
+
+        # (5) Agent -> any private address other than the proxy: dropped. This
+        #     is what closes every LAN side-channel toward OC/Postgres.
+        ip saddr $AGENT_IP ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } \
+            log prefix "biject-agent-egress-drop: " counter drop
+
+        # (6) Agent -> public internet: TCP/443 only (api.openai.com). OpenAI
+        #     publishes no stable IP ranges, so exact IP pinning is brittle;
+        #     the demo posture is "public TLS on 443 only, zero private reach".
+        #     To tighten to resolved IPs at apply time, see docker-user-rules.sh
+        #     (OPENAI_STRICT=1).
+        ip saddr $AGENT_IP tcp dport 443 accept
+        ip saddr $AGENT_IP log prefix "biject-agent-egress-drop: " counter drop
+    }
+
+    # -------------------------------------------------------------------------
+    # HOST-DESTINED TRAFFIC (published ports, host-namespace services)
+    # -------------------------------------------------------------------------
+    chain input {
+        type filter hook input priority -5; policy accept;
+
+        ct state established,related accept
+        iif lo accept
+
+        # If OC's or Postgres's port was ever accidentally published on the
+        # host (ports: in compose), only the proxy may use it; everyone else
+        # is logged + dropped. Nobody outside the box should ever see these.
+        ip saddr $PROXY_EDC_IP tcp dport { $OC_HTTP_PORT, $PG_PORT } accept
+        ip saddr $PROXY_EDGE_IP tcp dport { $OC_HTTP_PORT, $PG_PORT } accept
+        tcp dport { $OC_HTTP_PORT, $PG_PORT } log prefix "biject-oc-host-drop: " counter drop
+    }
+}

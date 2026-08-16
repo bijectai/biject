@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  study_def.xml (S4-D-20) - ODM 1.3 study metadata for the synthetic Phase II
+  demo study "BJT-DEMO-01" (StudyOID S_BJTDEMO). 100% SYNTHETIC - no real
+  study, site, subject, or PHI data anywhere in this file.
+
+  IMPORT NOTE (see seed.py): in OpenClinica 3.17 this file is uploaded
+  MANUALLY via the OC UI (Tasks -> Build Study -> Create CRF / import study
+  metadata); metadata import over the SOAP study WS is unreliable in 3.17,
+  so seed.py deliberately handles clinical DATA import only.
+
+  Structure: one site, one scheduled event (SE_VISIT1), two CRFs:
+    F_VITALS (IG_VITALS): SBP, DBP, HR, weight kg, height cm, BMI, nurse note
+    F_LABS   (IG_LABS):   hemoglobin, WBC, creatinine, collection date,
+                          lab source-transcription note
+  RangeChecks are declared on the numeric items so OC edit checks CAN fire
+  discrepancy notes on out-of-range values (e.g. SBP 80-200). SoftHard="Soft"
+  so an out-of-range import is accepted but flagged - exactly what the demo
+  needs (data lands, query raised).
+
+  All OIDs here are the single source of truth; seed_data.xml and the CLI
+  examples in oc3_client.py use these exact OIDs.
+-->
+<ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"
+     xmlns:OpenClinica="http://www.openclinica.org/ns/odm_ext_v130/v3.1"
+     FileType="Snapshot"
+     FileOID="BJT-DEMO-01-METADATA"
+     Description="BJT-DEMO-01 synthetic Phase II demo study metadata"
+     CreationDateTime="2026-08-13T00:00:00"
+     ODMVersion="1.3">
+  <Study OID="S_BJTDEMO">
+    <GlobalVariables>
+      <StudyName>BJT-DEMO-01</StudyName>
+      <StudyDescription>
+        Synthetic Phase II demo study for the biject clinical-trial query
+        resolution demo. All data is fabricated; no real PHI.
+      </StudyDescription>
+      <ProtocolName>BJT-DEMO-01</ProtocolName>
+    </GlobalVariables>
+    <BasicDefinitions/>
+    <MetaDataVersion OID="v1.0.0" Name="BJT-DEMO-01 v1.0.0">
+      <Protocol>
+        <StudyEventRef StudyEventOID="SE_VISIT1" OrderNumber="1" Mandatory="Yes"/>
+      </Protocol>
+
+      <!-- One scheduled visit carrying both CRFs. -->
+      <StudyEventDef OID="SE_VISIT1" Name="Visit 1" Repeating="No" Type="Scheduled">
+        <FormRef FormOID="F_VITALS" Mandatory="Yes"/>
+        <FormRef FormOID="F_LABS" Mandatory="Yes"/>
+      </StudyEventDef>
+
+      <FormDef OID="F_VITALS" Name="Vitals" Repeating="No">
+        <ItemGroupRef ItemGroupOID="IG_VITALS" Mandatory="Yes"/>
+      </FormDef>
+      <FormDef OID="F_LABS" Name="Labs" Repeating="No">
+        <ItemGroupRef ItemGroupOID="IG_LABS" Mandatory="Yes"/>
+      </FormDef>
+
+      <ItemGroupDef OID="IG_VITALS" Name="Vitals Measurements" Repeating="No"
+                    SASDatasetName="VITALS">
+        <ItemRef ItemOID="I_VITALS_SBP" OrderNumber="1" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITALS_DBP" OrderNumber="2" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITALS_HR" OrderNumber="3" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITALS_WEIGHT" OrderNumber="4" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITALS_HEIGHT" OrderNumber="5" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITALS_BMI" OrderNumber="6" Mandatory="No"/>
+        <ItemRef ItemOID="I_VITALS_NOTE" OrderNumber="7" Mandatory="No"/>
+      </ItemGroupDef>
+      <ItemGroupDef OID="IG_LABS" Name="Laboratory Results" Repeating="No"
+                    SASDatasetName="LABS">
+        <ItemRef ItemOID="I_LABS_HGB" OrderNumber="1" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_WBC" OrderNumber="2" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_CREAT" OrderNumber="3" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_COLLDATE" OrderNumber="4" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_SOURCE_NOTE" OrderNumber="5" Mandatory="No"/>
+      </ItemGroupDef>
+
+      <!-- ============================ Vitals items ======================= -->
+      <ItemDef OID="I_VITALS_SBP" Name="Systolic BP" DataType="integer" Length="3">
+        <Question><TranslatedText xml:lang="en">Systolic blood pressure (mmHg)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>80</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">SBP below plausible range (80-200 mmHg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>200</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">SBP above plausible range (80-200 mmHg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_VITALS_DBP" Name="Diastolic BP" DataType="integer" Length="3">
+        <Question><TranslatedText xml:lang="en">Diastolic blood pressure (mmHg)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>40</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">DBP below plausible range (40-130 mmHg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>130</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">DBP above plausible range (40-130 mmHg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_VITALS_HR" Name="Heart Rate" DataType="integer" Length="3">
+        <Question><TranslatedText xml:lang="en">Heart rate (beats/min)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>30</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">HR below plausible range (30-200 bpm)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>200</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">HR above plausible range (30-200 bpm)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_VITALS_WEIGHT" Name="Weight" DataType="float"
+               Length="5" SignificantDigits="1">
+        <Question><TranslatedText xml:lang="en">Body weight (kg)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>30</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Adult weight below plausible range (30-250 kg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>250</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Adult weight above plausible range (30-250 kg)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_VITALS_HEIGHT" Name="Height" DataType="float"
+               Length="5" SignificantDigits="1">
+        <Question><TranslatedText xml:lang="en">Height (cm)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>100</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Adult height below plausible range (100-230 cm)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>230</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Adult height above plausible range (100-230 cm)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <!-- BMI is captured (site-calculated) so cross-field consistency between
+           weight/height/BMI is checkable and a wrong weight is RECOVERABLE:
+           weight_kg = BMI * (height_m)^2. -->
+      <ItemDef OID="I_VITALS_BMI" Name="BMI" DataType="float"
+               Length="4" SignificantDigits="1">
+        <Question><TranslatedText xml:lang="en">Body mass index (kg/m2, site-calculated)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>10</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">BMI below plausible range (10-60)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>60</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">BMI above plausible range (10-60)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <!-- Free-text transcription of the paper source document; this is the
+           "sibling source field" corrections can be derived from. -->
+      <ItemDef OID="I_VITALS_NOTE" Name="Vitals Source Note" DataType="text" Length="255">
+        <Question><TranslatedText xml:lang="en">Source-document transcription note (vitals)</TranslatedText></Question>
+      </ItemDef>
+
+      <!-- ============================= Labs items ======================== -->
+      <ItemDef OID="I_LABS_HGB" Name="Hemoglobin" DataType="float"
+               Length="5" SignificantDigits="1">
+        <Question><TranslatedText xml:lang="en">Hemoglobin (g/dL)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>5</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Hemoglobin below plausible range (5-20 g/dL)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>20</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Hemoglobin above plausible range (5-20 g/dL)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_LABS_WBC" Name="WBC" DataType="float"
+               Length="5" SignificantDigits="1">
+        <Question><TranslatedText xml:lang="en">White blood cell count (10^9/L)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>1</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">WBC below plausible range (1-50 x10^9/L)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>50</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">WBC above plausible range (1-50 x10^9/L)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_LABS_CREAT" Name="Creatinine" DataType="float"
+               Length="5" SignificantDigits="2">
+        <Question><TranslatedText xml:lang="en">Serum creatinine (mg/dL)</TranslatedText></Question>
+        <RangeCheck Comparator="GE" SoftHard="Soft">
+          <CheckValue>0.2</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Creatinine below plausible range (0.2-10 mg/dL)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+        <RangeCheck Comparator="LE" SoftHard="Soft">
+          <CheckValue>10</CheckValue>
+          <ErrorMessage><TranslatedText xml:lang="en">Creatinine above plausible range (0.2-10 mg/dL)</TranslatedText></ErrorMessage>
+        </RangeCheck>
+      </ItemDef>
+      <ItemDef OID="I_LABS_COLLDATE" Name="Collection Date" DataType="date">
+        <Question><TranslatedText xml:lang="en">Sample collection date</TranslatedText></Question>
+      </ItemDef>
+      <!-- Free-text transcription of the central-lab report line; this is the
+           "sibling source field" a decimal-shift correction is derived from. -->
+      <ItemDef OID="I_LABS_SOURCE_NOTE" Name="Lab Source Note" DataType="text" Length="255">
+        <Question><TranslatedText xml:lang="en">Source-document transcription note (central lab report)</TranslatedText></Question>
+      </ItemDef>
+    </MetaDataVersion>
+  </Study>
+</ODM>

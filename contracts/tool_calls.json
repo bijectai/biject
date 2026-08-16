@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biject.dev/contracts/tool_calls.json",
+  "_status": "DRAFT v0 — pending S4-A-12 freeze by Adeel; the frozen version supersedes this file",
+  "title": "biject tool-call contract — OpenClinica 3 clinical-query demo",
+  "description": "The frozen wire contract between the agent adapter, the Rust verification proxy, and the Lean kernel. Every tool call the agent emits MUST validate against exactly one operation schema under $defs before the proxy will even construct a kernel query. Design rule: natural language NEVER reaches kernel parameters — every field is a closed pattern, a closed integer enum, or (for newValue only) opaque data whose SHA-256 digest is what the kernel sees. Free-text 'reason' fields are forbidden by construction: reasonCode is an integer enum.",
+  "$comment": "DRAFT authored under ticket S4-D-21 as a working copy for the adapter. Ticket S4-A-12 (Adeel) owns the freeze; on freeze, _status changes and this $comment records the freeze hash. Do not add operations or fields here without going through S4-A-12.",
+  "$defs": {
+    "oid": {
+      "type": "string",
+      "description": "OpenClinica 3 OID (study / event / form / item-group / item / subject key). Closed character class — no whitespace, no punctuation beyond '_' and '-', so an OID can never smuggle natural language or injection payloads into the kernel.",
+      "pattern": "^[A-Za-z0-9_\\-]+$",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "identifier": {
+      "type": "string",
+      "description": "Machine identifier (actor / principal id). Same closed class as OIDs plus '.' for service-account style names. Non-empty.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.\\-]*$",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "listOpenQueries": {
+      "type": "object",
+      "title": "listOpenQueries",
+      "description": "Read-only: list open data-clarification queries (discrepancy notes) for a study. Verified by the proxy against the kernel's read-access predicate before being forwarded to OC.",
+      "properties": {
+        "studyOid": {
+          "type": "string",
+          "description": "OC study OID whose open queries are listed.",
+          "pattern": "^[A-Za-z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": ["studyOid"],
+      "additionalProperties": false
+    },
+    "writeItemCorrection": {
+      "type": "object",
+      "title": "writeItemCorrection",
+      "description": "Write: correct a single item value in OC, fully addressed by its OID path (study → subject → event → form → item group → item). The proxy verifies the typed audit entry (actorId, action, reasonCode, tsUnixMs, sha256(newValue), OID path, sigEd25519) against the Lean kernel BEFORE forwarding anything to OC. No field in this object is free text from the model's reasoning: newValue is data being written (not reasoning), and everything else is a closed pattern or integer enum.",
+      "properties": {
+        "itemOid": {
+          "$ref": "#/$defs/oid",
+          "description": "OC item OID being corrected."
+        },
+        "newValue": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "The corrected item value, forwarded verbatim to OC. KERNEL BOUNDARY: this string itself NEVER reaches the Lean kernel — only its SHA-256 hash (hex) is bound into the audit entry the kernel checks. This keeps arbitrary clinical data (and any natural language inside it) out of kernel parameters while still committing to the exact bytes written."
+        },
+        "actorId": {
+          "$ref": "#/$defs/identifier",
+          "description": "Identity of the acting principal. Populated by the harness signing pipeline (S4-A-30), never chosen by the LLM."
+        },
+        "action": {
+          "type": "integer",
+          "enum": [0, 1, 2],
+          "description": "Write action kind as a closed integer enum: 0=create (item had no value), 1=modify (replace existing value), 2=annotate (attach correction note without changing the value)."
+        },
+        "reasonCode": {
+          "type": "integer",
+          "enum": [0, 1, 2, 3, 4, 5, 6, 7],
+          "description": "Reason for the correction — INTEGER enum, never free text (free-text reasons are how natural language would leak into the kernel; forbidden by construction). Meanings: 0=SOURCE_DATA_CONFIRMED (source document re-checked, value confirmed), 1=TRANSCRIPTION_ERROR (typo during data entry), 2=UNIT_CORRECTION (value entered in wrong unit), 3=DECIMAL_SHIFT (misplaced decimal point), 4=CROSS_FIELD_RECONCILIATION (corrected to agree with a related field), 5=MISSING_VALUE_COMPLETION (filling a value that was missing), 6=INVESTIGATOR_CONFIRMED (change confirmed by investigator), 7=OTHER_DOCUMENTED (reason documented outside the system; documentation reference required by site SOP)."
+        },
+        "tsUnixMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Timestamp of the audit entry, Unix epoch milliseconds (UTC). Populated by the harness signing pipeline (S4-A-30), never chosen by the LLM."
+        },
+        "sigEd25519": {
+          "type": "string",
+          "description": "Ed25519 signature over the canonical audit-entry bytes (canonicalization defined by S4-A-30), base64-encoded. A 64-byte Ed25519 signature encodes to exactly 88 base64 characters ending in '=='. Populated by the harness signing pipeline, never chosen by the LLM.",
+          "pattern": "^[A-Za-z0-9+/]{86}==$",
+          "minLength": 88,
+          "maxLength": 88
+        },
+        "subjectKey": {
+          "$ref": "#/$defs/oid",
+          "description": "OC study-subject key (e.g. SS_...)."
+        },
+        "studyOid": {
+          "$ref": "#/$defs/oid",
+          "description": "OC study OID the correction belongs to."
+        },
+        "studyEventOid": {
+          "$ref": "#/$defs/oid",
+          "description": "OC study-event definition OID (e.g. SE_...)."
+        },
+        "formOid": {
+          "$ref": "#/$defs/oid",
+          "description": "OC form (CRF version) OID (e.g. F_...)."
+        },
+        "itemGroupOid": {
+          "$ref": "#/$defs/oid",
+          "description": "OC item-group OID (e.g. IG_...)."
+        }
+      },
+      "required": [
+        "itemOid",
+        "newValue",
+        "actorId",
+        "action",
+        "reasonCode",
+        "tsUnixMs",
+        "sigEd25519",
+        "subjectKey",
+        "studyOid",
+        "studyEventOid",
+        "formOid",
+        "itemGroupOid"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

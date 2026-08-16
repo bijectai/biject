@@ -1,0 +1,15 @@
+# Lean build artifacts
+PolicyEnv/.lake/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets — env files never committed (placeholders live in *.env.example)
+.env
+*.env
+!*.env.example
+
+# Host-side preflight logs
+preflight-logs/
