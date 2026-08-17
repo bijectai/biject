@@ -114,7 +114,7 @@ services:
   # request, so the console comes up and reports the others as down rather than
   # refusing to start alongside them.
   biject-console:
-    image: ghcr.io/bijectai/biject-console:7681ee11e9099d0931d1335e5d5f27ee61d1ecf7
+    image: ghcr.io/bijectai/biject-console:ac34898fddb7ef6a78379ee6b96af5fed27ce93b
     ports:
       - "5173:80"
     restart: unless-stopped
