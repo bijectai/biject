@@ -89,8 +89,17 @@ def literal_part(value: str) -> str | None:
             match = WITH_DEFAULT.match(inner)
             if match and match.group(2).strip():
                 return match.group(2).strip()
-        # Every interpolation defers, and any surrounding text is structure
-        # (a URL scheme, a separator) rather than the credential itself.
+
+        # An interpolation does not sanitize the text around it. `${UNSET}sk-live-x`
+        # is a reference glued to a committed literal, and reading "starts with a
+        # reference" as "contains no secret" is how this was bypassed. Strip the
+        # interpolations and judge what is left: pure punctuation is structure (a
+        # separator, a URL scheme), anything alphanumeric is content that shipped
+        # in the file.
+        remainder = INTERPOLATION.sub("", text)
+        remainder = re.sub(r"\$[A-Za-z_][A-Za-z0-9_]*", "", remainder)
+        if any(ch.isalnum() for ch in remainder):
+            return remainder.strip()
         return None
 
     if PLAIN_REF.match(text):
@@ -120,23 +129,29 @@ def findings_for(value, key: str, path: str) -> list[str]:
     return [f"{path} = {shown}"]
 
 
-def embedded_assignment(text: str, path: str) -> list[str]:
-    """Catch a `KEY=value` pair living inside a plain string scalar.
+ASSIGNMENT = re.compile(r"(?:^|\s)-{0,2}([A-Za-z_][A-Za-z0-9_.-]*)=(\S*)")
 
-    Two ways this shows up. `-API_KEY=x` with no space after the dash is not a
-    YAML sequence entry at all — it parses as one scalar, so the structural
-    walk never sees a key. And a `command:` can carry `--api-key=x` on it. The
-    credential is committed either way, whether or not Compose would accept the
-    file, so it is reported either way. Hyphens are normalized to underscores
-    so CLI-style flags match the same names.
+
+def embedded_assignments(text: str, path: str) -> list[str]:
+    """Catch every `KEY=value` pair living inside a plain string scalar.
+
+    Several ways this shows up. `-API_KEY=x` with no space after the dash is
+    not a YAML sequence entry at all — it parses as one scalar, so the
+    structural walk never sees a key. A `command:` can carry `--api-key=x`. And
+    one scalar can hold several assignments at once.
+
+    Every pair is checked, not just the first. Splitting on the first `=` and
+    stopping meant `SOMEVAR=x API_KEY=secret` was judged entirely on `SOMEVAR`,
+    which is how this was bypassed. The credential is committed whether or not
+    Compose would accept the file, so it is reported either way. Hyphens are
+    normalized to underscores so CLI-style flags match the same names.
     """
-    name, sep, value = text.partition("=")
-    if not sep:
-        return []
-    candidate = name.strip().lstrip("-").strip().replace("-", "_")
-    if not candidate:
-        return []
-    return findings_for(value, candidate, f"{path}.{candidate}")
+    out: list[str] = []
+    for name, value in ASSIGNMENT.findall(text):
+        candidate = name.strip().strip("-").replace("-", "_")
+        if candidate:
+            out += findings_for(value, candidate, f"{path}.{candidate}")
+    return out
 
 
 def walk(node, path: str) -> list[str]:
@@ -155,7 +170,7 @@ def walk(node, path: str) -> list[str]:
             else:
                 out += findings_for(value, str(key), child)
                 if isinstance(value, str):
-                    out += embedded_assignment(value, child)
+                    out += embedded_assignments(value, child)
         return out
 
     if isinstance(node, list):
@@ -163,10 +178,10 @@ def walk(node, path: str) -> list[str]:
             if isinstance(item, (dict, list)):
                 out += walk(item, f"{path}[{i}]")
             elif isinstance(item, str):
-                # Sequence entries carry their own `KEY=value` pairs.
-                name, sep, value = item.partition("=")
-                if sep:
-                    out += findings_for(value, name, f"{path}.{name.strip()}")
+                # Sequence entries carry their own `KEY=value` pairs — and
+                # possibly more than one, which is why this shares the scalar
+                # path rather than splitting on the first `=`.
+                out += embedded_assignments(item, path)
         return out
 
     return out
@@ -201,6 +216,10 @@ UNSAFE = [
     ("folded scalar",         "services:\n  a:\n    environment:\n      API_KEY: >-\n        folded\n"),
     ("unspaced list entry",   "services:\n  a:\n    environment:\n      -API_KEY=packed\n"),
     ("cli flag literal",      "services:\n  a:\n    command: server --api-key=abc123\n"),
+    ("v5 concat after ref",   "services:\n  a:\n    environment:\n      API_KEY: ${UNSET}sk-live-real\n"),
+    ("v5 concat before ref",  "services:\n  a:\n    environment:\n      API_KEY: hunter2${UNSET}\n"),
+    ("v5 second assignment",  "services:\n  a:\n    command: server --flag=1 --api-key=abc123\n"),
+    ("v5 list 2nd assignment",'services:\n  a:\n    environment:\n      - "SOMEVAR=x API_KEY=leaked"\n'),
 ]
 
 SAFE = [
@@ -221,6 +240,12 @@ SAFE = [
     # plural from matching, which is why that alternative is written
     # _TOKEN(?![A-Za-z]) rather than plain _TOKEN.
     ("plural token flag",     "services:\n  a:\n    command: server --max-tokens=100\n"),
+    ("concat of refs only",   "services:\n  a:\n    environment:\n      API_KEY: ${A}${B}\n"),
+    ("refs with separator",   "services:\n  a:\n    environment:\n      API_KEY: ${A}-${B}\n"),
+    # Both exercise the multi-assignment scan specifically: several pairs in
+    # one scalar, none of them a committed literal.
+    ("two deferred pairs",    'services:\n  a:\n    environment:\n      - "A=${A} API_KEY=${K}"\n'),
+    ("path with $VAR",        'services:\n  a:\n    environment:\n      - "PATH=/usr/bin:$PATH"\n'),
 ]
 
 

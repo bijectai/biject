@@ -340,10 +340,22 @@ reference, so **`${VAR:-fallback}` passed** even though the fallback is a litera
 shipped in the file. It also skipped non-string scalars (a numeric password) and its
 key-name list missed common access-key spellings.
 
-Four rounds of fixing one report at a time did not converge, so every bypass ever found
-is now a pinned case in the script's `SAFE`/`UNSAFE` lists, and `--self-test` runs them
-in CI before the scan does. **Add a case before fixing a new report.** The suite has
-already paid for itself — it caught a regression during its own introduction.
+A fifth round found two more, both in the *value* reasoning again: an interpolation was
+treated as sanitizing the text around it, so `${UNSET}sk-live-key` passed; and a scalar
+was split on the first `=` only, so `SOMEVAR=x API_KEY=secret` was judged entirely on
+`SOMEVAR`.
+
+Five rounds of fixing one report at a time did not converge, so every bypass ever found
+is a pinned case in the script's `SAFE`/`UNSAFE` lists, and `--self-test` runs them in
+CI before the scan does. **Add a case before fixing a new report** — that ordering is
+the process, not a suggestion. The suite has already paid for itself twice: it caught a
+regression during its own introduction, and it is what makes each new round cost
+minutes instead of a re-audit.
+
+Accepted noise: a secret-shaped key holding a URL with embedded references
+(`DB_PASSWORD: ${U}:${P}@host`) is flagged on the leftover `:@host`. A password field
+holding a URL is unusual enough that erring toward flagging is the right side to be
+wrong on.
 
 Safe forms are `${VAR}`, `${VAR:?message}`, `$VAR`, and an empty placeholder.
 `${VAR:-fallback}` is *not* safe. Public keys (`AUDIT_VERIFY_PUBKEY`) are excluded by
