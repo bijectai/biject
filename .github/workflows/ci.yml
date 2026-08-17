@@ -47,6 +47,12 @@ jobs:
       # behaviour under us between runs.
       - run: python3 -m pip install --quiet 'pyyaml==6.0.2'
 
+      # The checker's own regression suite. It has been bypassed four times, so
+      # every historical bypass is a pinned case and they run before the scan
+      # does — a checker that has quietly stopped checking is worse than none.
+      - name: Secret checker self-test
+        run: python3 scripts/check-no-secrets.py --self-test
+
       - name: No secret may be committed in any compose file
         run: |
           set -euo pipefail

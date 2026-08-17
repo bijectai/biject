@@ -252,8 +252,8 @@ end; Bedrock and Foundry adapters written, not yet run."
   40-character git SHA, third-party images to a `sha256` digest.
 - `scripts/verify-pins.sh` — enforces that rule. Runs in CI on every PR.
 - `scripts/check-no-secrets.py` — parses every tracked compose file and fails on a
-  literal value under a credential-shaped key. Deliberately a parser, not a pattern;
-  see § CI.
+  literal value under a credential-shaped key. Deliberately a parser, not a pattern,
+  and it carries its own regression suite (`--self-test`); see § CI.
 - `scripts/pin-images.sh` — moves a pin. Updates the image tag **and** the matching
   `BIJECT_IMAGE_SHA` together, because a container that reports a different SHA than the
   one deployed is worse than one that reports nothing.
@@ -298,6 +298,7 @@ The platform half has no test suite — it has no application code. What stands 
 ```
 ./scripts/verify-pins.sh              # every image immutable; no build: stanza
 docker compose config -q              # the file parses and resolves
+python3 scripts/check-no-secrets.py --self-test      # the checker still checks
 git ls-files '*compose*.y*ml' | xargs python3 scripts/check-no-secrets.py
 ./scripts/smoke.sh                    # after `docker compose up -d`
 ```
@@ -322,15 +323,31 @@ service standard does not apply — see
    then `scripts/check-no-secrets.py` over every tracked compose file.
 2. **`pins`** — `scripts/verify-pins.sh`. Every image immutable, no `build:` stanza.
 
-`check-no-secrets.py` **parses** the YAML rather than grepping it, and that is the
-load-bearing detail. It was a grep three times and had a bypass every time — block
-sequence, then quoted entries, then flow style — because YAML spells the same mapping
-several legal ways and each pattern only covered the spellings its author had in mind.
-A parser sees every spelling as the same data, follows anchors and aliases, and checks
-the whole document rather than `environment:` alone (a credential in `labels:` or
-`build.args:` is just as committed). A `${VAR}` reference and an empty placeholder are
-the two accepted safe forms. If you find yourself adding a regex alternative here,
-that is the signal to widen the parser instead.
+`check-no-secrets.py` **parses** the YAML rather than grepping it, and it **carries its
+own regression suite**. Both details are load-bearing, and the second one is the more
+important.
+
+This check has been bypassed four times. The first three were line-based patterns —
+block sequence, then quoted entries, then flow style — each covering only the YAML
+spellings its author had in mind. Parsing fixed that whole class: a parser sees every
+spelling as the same data, follows anchors and aliases, and checks the whole document
+rather than `environment:` alone, since a credential in `labels:` or `build.args:` is
+just as committed.
+
+The fourth bypass is the instructive one, because the parser was right about
+*structure* and wrong about *values*: it treated any `$`-prefixed string as a safe
+reference, so **`${VAR:-fallback}` passed** even though the fallback is a literal
+shipped in the file. It also skipped non-string scalars (a numeric password) and its
+key-name list missed common access-key spellings.
+
+Four rounds of fixing one report at a time did not converge, so every bypass ever found
+is now a pinned case in the script's `SAFE`/`UNSAFE` lists, and `--self-test` runs them
+in CI before the scan does. **Add a case before fixing a new report.** The suite has
+already paid for itself — it caught a regression during its own introduction.
+
+Safe forms are `${VAR}`, `${VAR:?message}`, `$VAR`, and an empty placeholder.
+`${VAR:-fallback}` is *not* safe. Public keys (`AUDIT_VERIFY_PUBKEY`) are excluded by
+name, because a public half is meant to be committed.
 
 
 ## Automated review
