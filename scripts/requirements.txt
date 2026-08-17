@@ -1,0 +1,7 @@
+# scripts/ tooling dependencies.
+#
+# audit_bound_harness.py (S4-D-30) — runtime needs cryptography only (Ed25519).
+# gen_audit_fixture.py additionally needs pydantic + aiofiles + a read-only
+# sibling checkout of biject-api (it drives the real ledger code to produce
+# the golden fixture); see its docstring.
+cryptography>=41

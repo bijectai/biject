@@ -4,7 +4,7 @@ Project-level guidance and durable facts for this repository. Keep entries factu
 current; when a change touches one of these areas, update the relevant section in the
 same PR.
 
-## 1. Context
+## 1. Context *(platform)*
 
 **biject** is a formal-verification guardrail layer for AI-agent tool calls. An agent's
 proposed action is turned into a Lean 4 conjecture, checked by a pre-warmed Lean kernel
@@ -23,15 +23,30 @@ The platform is split across seven repositories:
 | `biject-console` | Operator UI. |
 | `biject-contracts` | The wire contracts every other repo speaks. Ships no runtime. |
 
-**This repo is the meta repo. It owns the deployment topology and nothing else.**
-`docker-compose.yml` names every service and pins each one to an immutable image; there
-is no application code here and no image published from here.
+**This repo holds two independent things.** They arrived separately and both are
+live:
+
+1. **The platform deployment topology.** The root `docker-compose.yml` names every
+   service and pins each one to an immutable image; no image is published from here.
+   Sections marked *(platform)* below govern it.
+2. **The sprint v4 demo** — `PolicyEnv/`, `edc/`, `adapters/`, `infra/hetzner/`,
+   `docs/DAY1-2-RUNBOOK.md`. Sections marked *(sprint v4)* govern it.
+
+No code path crosses between the two. Two names do collide and are worth fixing in
+your head before reading further: the root `docker-compose.yml` is the platform
+topology while `infra/hetzner/docker-compose.yml` is the demo host stack, and
+`contracts/tool_calls.json` is the sprint's draft contract — the platform's contracts
+live in `bijectai/biject-contracts` and are vendored into each service.
+
+An earlier version of this file said this repo owned the deployment topology "and
+nothing else". That was true when it was written and is not true now; the sprint work
+landed on `main` afterwards.
 
 A pin is a fact about what is running. Changing one is a deploy, and it shows up as a
 one-line diff with a commit SHA you can look up. Most of the rules below exist to keep
 that property true.
 
-## 2. Ownership
+## 2. Ownership *(platform)*
 
 | Area | Owner |
 | --- | --- |
@@ -107,9 +122,133 @@ where it would be committed. `biject-trace` receives only `AUDIT_VERIFY_PUBKEY`,
 public half — a read-only observer holding the signing key would void the ledger's
 non-repudiation guarantee.
 
-## Repo layout
+## The sprint v4 demo
 
-- `docker-compose.yml` — the topology. Every image pinned: biject services to a full
+`main` carries the **4-day sprint v4 demo**: an OpenAI Agents SDK agent that resolves
+open data queries in a self-hosted OpenClinica 3.17 CE (OC3) EDC, with every write
+forced through a verification proxy that checks a **Lean kernel-decided audit bound
+before forwarding**. Ticket IDs `S4-D-##` (Dev) and `S4-A-##` (Adeel). Deviations are
+logged in `.claude/deviations/` — read those before assuming a ticket's original spec
+still describes the code.
+
+The invariants below are the sprint's own statement of §2B.1 and §2B.2 in its own
+terms. They agree with the rules above; where the sprint is more specific, the sprint
+text is the operative one for the demo's files.
+
+## Invariants *(sprint v4)* — do not weaken
+
+- **biject never receives natural language at verification time.** The proxy
+  extracts a typed structured entry and sends only that to the kernel. The
+  corrected value (`newValue`) is forwarded to OC but only its SHA-256 hash
+  enters the kernel. `reasonCode` is an integer enum, never free text. Any
+  change letting NL reach a kernel parameter is a product-claim violation.
+- **Verify before forward, fail closed.** The proxy calls verify first and
+  forwards only on an `allowed`/PROVED verdict; any verify timeout, error, or
+  unknown verdict is a denial (`verdict != "allowed"` semantics, never a
+  known-bad blocklist). Advisory lanes (heuristics, LLM judge) run outside the
+  enforcement path and their output is never a kernel input or proxy decision.
+- **The enforcement bound holds at the network layer.** OC and its Postgres
+  live on an internal Docker network reachable only from the proxy; the agent
+  host has no route to OC except the proxy (`infra/hetzner/firewall/`,
+  verified by `verify_lockdown.sh` — tested, not assumed). This is why the
+  agent uses SDK **function tools over plain HTTP, not MCP** — MCP is the
+  post-sprint upgrade.
+- **Two trusted inputs, both named:** `sigOk` (Ed25519 verdict from the
+  signing pipeline — since S4-D-30, verified over the signed digest
+  recomputed from the ledger-stored canonical params, so proven bytes =
+  recorded bytes) and `nowMs` (proxy-supplied clock). Documented in
+  `PolicyEnv/PolicyEnv/Contract.lean`; keep the trust-boundary paragraph in
+  sync with any change to either.
+- **Lean house rules:** no `sorry`, no `axiom`, no `native_decide`, no
+  `unsafe`, no `extern` anywhere under `PolicyEnv/`. Kernel checks stay Nat
+  comparisons, String (in)equality, String byte length (`utf8ByteSize` — NOT
+  `String.length`, which drags in classical axioms on this toolchain), and
+  enum bounds. `AuditEntryValid` is `Decidable` with zero axiom dependencies
+  (verified via the `#print axioms` lines at the bottom of `AuditBound.lean`,
+  which print into every `lake build` log).
+- **Strict monotonicity, bound to the real ledger head (S4-D-30):**
+  backdating is rejected with strict `>` against the ledger head; an entry
+  stamped exactly at the head is a replay. The head is no longer a bare
+  caller-supplied timestamp: `VerifyContext` carries the
+  (`ledgerHeadHash`, `ledgerHeadTsMs`) pair read from the verified signed
+  chain, and the predicate enforces digest shape + genesis consistency so a
+  stub context (e.g. `ledger_head_ts = 0` against a non-empty chain) is
+  refuted. `scripts/audit_bound_harness.py` proves the derivation against a
+  golden fixture generated by biject-api's real chain code. Known
+  limitation: strict monotonicity assumes a single writer — fine for the
+  single-agent demo, needs a sequencer for multi-writer.
+- **OC3 auth is form-session (read) + WS-Security UsernameToken (write).**
+  OC3 CE has SOAP + session ODM export only. **No OC4 REST. Never claim
+  OAuth.** Seeded study data is 100% synthetic — no real PHI, ever.
+- **SDK tracing is OFF** (`OPENAI_AGENTS_DISABLE_TRACING=1` /
+  `set_tracing_disabled(True)`): PHI-adjacent payloads must not leave the
+  host. Sprint decision #3.
+
+## Public claim boundary *(sprint v4)*
+
+The demo proves: formal action-gating on a defined action surface, enforced
+pre-commit, with a third-party-checkable proof artifact. It does **not** prove
+21 CFR Part 11 compliance or coverage outside the formalized surface. PROVED
+means the predicate holds under kernel checking — not that FDA would agree.
+Adapter claim: "reference integration for OpenAI Agents SDK, validated end to
+end; Bedrock and Foundry adapters written, not yet run."
+
+## File-to-role map *(sprint v4)*
+
+- `PolicyEnv/` — standalone Lean 4 Lake project (toolchain
+  `leanprover/lean4:v4.28.0`, same as the platform's `lean-worker/PolicyEnv`).
+  - `PolicyEnv/Contract.lean` — typed kernel-side mirror of the tool-call
+    contract (`AuditEntry`, `VerifyContext`, action/reason enums,
+    `forwardSkewMs`), plus the trust-boundary documentation.
+  - `PolicyEnv/AuditBound.lean` — `AuditEntryValid` (S4-D-13, hardened by
+    S4-D-30: ledger-head binding, missing vs unknown reason split) + derived
+    `Decidable` instance + compile-time regression vectors (`lake build` is
+    the regression suite; the accepting vector's numbers come from the
+    ledger fixture below and are cross-checked by the harness).
+- `contracts/tool_calls.json` — **DRAFT v0** of the tool-call contract;
+  superseded by the S4-A-12 freeze (Adeel). The platform convention is that
+  contracts live in `bijectai/biject-contracts` and are vendored — reconcile
+  at freeze time.
+- `edc/` — OC3 integration: `oc3_client.py` (session ODM read with
+  `includeDNs=y&includeAudits=y`; SOAP `importData` write with `UpsertOn` +
+  `TransactionType="Update"`), `study_def.xml` / `seed_data.xml` (synthetic
+  study BJT-DEMO-01 with deliberately messy, *self-resolvable* data),
+  `seed.py` (data import + `--verify` open-query count).
+- `adapters/openai/` — Agents SDK function tools POSTing to the proxy.
+  `adapters/` is **outside the core dependency graph**; core code never
+  imports from it.
+- `infra/hetzner/` — compose skeleton (Traefik TLS via `DEMO_DOMAIN`,
+  networks `edge` + internal `edc_internal`), `openclinica/` (OC 3.17 CE +
+  Postgres 9.5 + **OpenClinica-ws SOAP WAR** — the ws WAR is a separate
+  artifact; without it there is nothing to write to), `firewall/`
+  (DOCKER-USER chain lockdown + `verify_lockdown.sh` acceptance test).
+- `scripts/preflight.sh` — S4-D-00 host checks (memory/disk headroom,
+  egress to api.openai.com, Responses API access, docker versions). Run ON
+  the Hetzner host before anything else.
+- `scripts/audit_bound_harness.py` (S4-D-30) — verifies the golden ledger
+  fixture (`scripts/fixtures/audit_ledger/`, produced by
+  `scripts/gen_audit_fixture.py` driving biject-api's real chain code),
+  derives the ledger head from the chain, verifies both Ed25519 surfaces,
+  and fails if the Lean accepting vector and the fixture disagree. Runtime
+  dep: `cryptography` (`scripts/requirements.txt`). The fixture ships
+  PUBLIC keys only; all signing keys are ephemeral, never committed.
+- `docs/DAY1-2-RUNBOOK.md` — the manual, host-side steps that cannot be done
+  from a code sandbox, in execution order, with the sprint's gates and
+  fallback decision points.
+
+## Deploy/build notes *(sprint v4)*
+
+- Coolify must use **Raw Compose Deployment** mode — Application mode
+  silently strips `ipam` from compose networks (learned on the platform
+  deploy; recorded in the knowledge graph as `CoolifyTraefikDeployment`).
+- Lean build: `cd PolicyEnv && lake build` (that also runs the compile-time
+  regression vectors). Toolchain pinned in `PolicyEnv/lean-toolchain`.
+- Secrets only via untracked `.env` (see `infra/hetzner/.env.example`);
+  nothing secret is committed. API keys live in env files on the host.
+
+## Repo layout *(platform)*
+
+- `docker-compose.yml` — the topology (the root file, not `infra/hetzner/`'s). Every image pinned: biject services to a full
   40-character git SHA, third-party images to a `sha256` digest.
 - `scripts/verify-pins.sh` — enforces that rule. Runs in CI on every PR.
 - `scripts/pin-images.sh` — moves a pin. Updates the image tag **and** the matching
@@ -120,7 +259,7 @@ non-repudiation guarantee.
   says it is the build this repo claims to deploy.
 - `.env.example` — every variable the stack reads. `.env` itself is gitignored.
 
-## Rules for this file
+## Rules for `docker-compose.yml` *(platform)*
 
 - **No floating tags.** No `:latest`, no `:main`, no `${VAR}` in an `image:` line. The
   service repos publish exactly one tag per merge — the commit SHA — precisely so there
@@ -133,7 +272,7 @@ non-repudiation guarantee.
 - **Move pins with the script.** Hand-editing works right up until the day the
   `BIJECT_IMAGE_SHA` beside it is forgotten.
 
-## Deploying
+## Deploying *(platform)*
 
 1. Merge to `main` in a service repo. Its `ci` run publishes
    `ghcr.io/bijectai/<repo>:<sha>` and prints the pin line in the job summary.
@@ -143,9 +282,9 @@ non-repudiation guarantee.
 5. `docker compose up -d && ./scripts/smoke.sh`
 
 
-## Test baseline
+## Test baseline *(platform)*
 
-There is no test suite here — this repo has no application code. What stands in for one:
+The platform half has no test suite — it has no application code. What stands in for one:
 
 ```
 ./scripts/verify-pins.sh              # every image immutable; no build: stanza
@@ -156,9 +295,12 @@ docker compose config -q              # the file parses and resolves
 `verify-pins.sh` and `docker compose config -q` are what CI runs. `smoke.sh` needs a
 running stack and is a local/post-deploy check.
 
+The sprint half builds with `cd PolicyEnv && lake build`, which also runs its
+compile-time regression vectors. CI does not run it.
 
 
-## CI
+
+## CI *(platform)*
 
 `.github/workflows/ci.yml` runs two jobs. This repo publishes no image, so the four-job
 service standard does not apply — see
@@ -209,10 +351,10 @@ skipped before any model call.
   job with a "control-plane skew" error if `main` does not yet carry
   `.github/codex/classify.py` — that is expected exactly once, and merging fixes it.
 
-- **No image has actually been published to GHCR yet.** Every service repo's `ci`
-  publishes on merge to `main`; until those merges happen, the tags this file pins do not
-  exist and `docker compose pull` will 404. The pins are correct — they name the commits
-  that CI will build — but the stack cannot come up against them until CI has run.
+- **Four of the six images are not published yet.** `biject-proxy` and
+  `biject-console` have merged to `main` and their CI published the tags this file
+  pins, so those two pull. The rest name commits CI will build but has not, so
+  `docker compose pull` 404s on them.
 - **`biject-api` has no publish workflow.** It is the only service whose repo does not
   yet carry the standard CI, so `ghcr.io/bijectai/biject-api:<sha>` has no producer.
   Adding that workflow to `biject-api` is the single blocking item for a full-stack
@@ -226,8 +368,9 @@ skipped before any model call.
 ## Knowledge graph
 
 This platform has a shared, persistent knowledge graph via the `knowledge-graph` MCP
-server. It holds what isn't recoverable from reading the code: why things are the way
-they are, constraints that will bite you, and who owns what.
+server — the Supabase project `brain` (`entities` / `observations` / `relations`, in the
+`biject` project namespace). It holds what isn't recoverable from reading the code: why
+things are the way they are, constraints that will bite you, and who owns what.
 
 - At the start of a task, `search_nodes` for the components you're about to touch.
 - At the end, record what changed and why: `create_entities` for new components,

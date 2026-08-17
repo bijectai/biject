@@ -2,7 +2,9 @@
 # stack reads — it must never be committed. .env.example is the tracked template.
 .env
 .env.*
+*.env
 !.env.example
+!*.env.example
 
 *.pem
 *.key
@@ -10,6 +12,17 @@
 # Local-only compose overlays. These can point services at local builds or carry
 # real keys; keep them on disk and out of the repo.
 docker-compose.override.yml
+
+# Lean build artifacts
+PolicyEnv/.lake/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Host-side preflight logs
+preflight-logs/
 
 # Editor
 .DS_Store
