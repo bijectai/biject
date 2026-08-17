@@ -365,6 +365,21 @@ The generalizable bit: **a checker's own output is an output surface.** The same
 to `verify-pins.sh` and `smoke.sh` if either is ever taught to print a value rather than
 a name.
 
+A seventh round found a container-valued key: `API_KEY: [sk-live-real]`. The secret-shaped
+parent was dropped when recursing into a list or map, so anything below it was judged on
+the inner key names alone. The nearest secret-shaped ancestor now travels down with the
+recursion.
+
+That fix needs two guards, and both are load-bearing. Compose's own `secrets:` section
+matches the name pattern but *declares* secrets rather than holding them, so it never
+acts as an inheriting parent, and its schema fields (`file`, `external`, `name`,
+`environment`, `target`, `uid`, …) are never treated as values. Separately, the
+`*_FILE` / `*_PATH` convention names where a secret lives — `API_KEY_FILE:
+/run/secrets/api` is the recommended way to feed a container, and flagging it would push
+people off the safest pattern available. Both are pinned as `SAFE` cases; the second was
+caught by testing the fix against a realistic `secrets:` deployment rather than only
+against the reported bypass, which is worth doing every time.
+
 Accepted noise: a secret-shaped key holding a URL with embedded references
 (`DB_PASSWORD: ${U}:${P}@host`) is flagged on the leftover `:@host`. A password field
 holding a URL is unusual enough that erring toward flagging is the right side to be

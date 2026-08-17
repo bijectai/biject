@@ -63,8 +63,35 @@ SECRET_KEY = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-# A key that is public by definition, even though it matches above.
-PUBLIC_KEY = re.compile(r"(PUBKEY|PUBLIC_KEY|_PUB$)", re.IGNORECASE)
+# Keys that match above but cannot carry the material. Public halves are meant
+# to be committed — biject-trace takes AUDIT_VERIFY_PUBKEY that way. And the
+# `*_FILE` / `*_PATH` convention names *where* a secret lives: `API_KEY_FILE:
+# /run/secrets/api` is the recommended way to feed a container, so flagging it
+# would push people off the safest pattern available.
+PUBLIC_KEY = re.compile(r"(PUBKEY|PUBLIC_KEY|_PUB$|_FILE$|_PATH$|_FILEPATH$)", re.IGNORECASE)
+
+# Compose's own `secrets:` section matches SECRET_KEY but declares secrets
+# rather than holding them, so it must not act as an inheriting parent.
+SCHEMA_SECTIONS = {"secrets", "secret", "configs", "config"}
+
+# Keys inside that section that name where a secret lives — a path, a handle,
+# an env var — never the material itself.
+SCHEMA_FIELDS = {
+    "file", "external", "name", "environment", "driver", "driver_opts",
+    "labels", "target", "uid", "gid", "mode", "template_driver",
+}
+
+
+def inheritable(key: str) -> bool:
+    """True when a container under this key holds credential material.
+
+    A secret-shaped key whose value is a list or map still holds a secret —
+    `API_KEY: [sk-live-real]` is a credential — so the key has to travel down
+    with the recursion. It was dropped at the boundary, which is how v7 got in.
+    """
+    if key.lower() in SCHEMA_SECTIONS:
+        return False
+    return bool(SECRET_KEY.search(key)) and not PUBLIC_KEY.search(key)
 
 # ${NAME:-default} / ${NAME-default} substitute a value when NAME is unset, so
 # the default is itself committed content. ${NAME:?msg} / ${NAME?msg} fail
@@ -163,34 +190,48 @@ def embedded_assignments(text: str, path: str) -> list[str]:
     return out
 
 
-def walk(node, path: str) -> list[str]:
+def walk(node, path: str, inherited: str | None = None) -> list[str]:
     """Recurse the whole document, not just `environment:`.
 
     A credential is just as committed in `labels:`, `build.args:`, or a
     `command:`, so nothing is scoped out.
+
+    `inherited` is the nearest secret-shaped ancestor key, carried down so a
+    container value stays covered — see `inheritable`.
     """
     out: list[str] = []
 
     if isinstance(node, dict):
         for key, value in node.items():
-            child = f"{path}.{key}" if path else str(key)
+            name = str(key)
+            child = f"{path}.{name}" if path else name
             if isinstance(value, (dict, list)):
-                out += walk(value, child)
+                # Carry a secret-shaped key down; a plain key does not clear an
+                # inherited one, so `API_KEY: {a: {b: buried}}` stays covered.
+                out += walk(value, child, name if inheritable(name) else inherited)
             else:
-                out += findings_for(value, str(key), child)
+                out += findings_for(value, name, child)
                 if isinstance(value, str):
                     out += embedded_assignments(value, child)
+                # Under a secret-shaped ancestor, the leaf's own key is just a
+                # label — unless it is Compose schema naming where a secret
+                # lives rather than carrying it.
+                if inherited and not inheritable(name) and name.lower() not in SCHEMA_FIELDS:
+                    out += findings_for(value, inherited, child)
         return out
 
     if isinstance(node, list):
         for i, item in enumerate(node):
             if isinstance(item, (dict, list)):
-                out += walk(item, f"{path}[{i}]")
-            elif isinstance(item, str):
-                # Sequence entries carry their own `KEY=value` pairs — and
-                # possibly more than one, which is why this shares the scalar
-                # path rather than splitting on the first `=`.
-                out += embedded_assignments(item, path)
+                out += walk(item, f"{path}[{i}]", inherited)
+            else:
+                if isinstance(item, str):
+                    # Sequence entries carry their own `KEY=value` pairs — and
+                    # possibly more than one, which is why this shares the
+                    # scalar path rather than splitting on the first `=`.
+                    out += embedded_assignments(item, path)
+                if inherited:
+                    out += findings_for(item, inherited, f"{path}[{i}]")
         return out
 
     return out
@@ -229,6 +270,10 @@ UNSAFE = [
     ("v5 concat before ref",  "services:\n  a:\n    environment:\n      API_KEY: hunter2${UNSET}\n"),
     ("v5 second assignment",  "services:\n  a:\n    command: server --flag=1 --api-key=abc123\n"),
     ("v5 list 2nd assignment",'services:\n  a:\n    environment:\n      - "SOMEVAR=x API_KEY=leaked"\n'),
+    ("v7 list-valued key",    "services:\n  a:\n    environment:\n      API_KEY: [sk-live-real]\n"),
+    ("v7 map-valued key",     "services:\n  a:\n    environment:\n      DB_PASSWORD: {inner: hunter2}\n"),
+    ("v7 nested sequence",    "services:\n  a:\n    environment:\n      AUTH_TOKEN:\n        - nested-secret\n"),
+    ("v7 deep nesting",       "services:\n  a:\n    environment:\n      API_KEY:\n        a:\n          b: buried\n"),
 ]
 
 SAFE = [
@@ -255,6 +300,19 @@ SAFE = [
     # one scalar, none of them a committed literal.
     ("two deferred pairs",    'services:\n  a:\n    environment:\n      - "A=${A} API_KEY=${K}"\n'),
     ("path with $VAR",        'services:\n  a:\n    environment:\n      - "PATH=/usr/bin:$PATH"\n'),
+    # Compose's own `secrets:` schema. Inheriting a secret-shaped parent key
+    # down into children would flag every one of these, and they are file
+    # paths and handles, not credentials — the fix for v7 must not break them.
+    ("compose secrets block", "secrets:\n  db_password:\n    file: ./db_password.txt\n"),
+    ("external secret",       "secrets:\n  api_key:\n    external: true\n    name: prod_api_key\n"),
+    ("service secrets list",  "services:\n  a:\n    secrets:\n      - db_password\n"),
+    ("secret env indirection","secrets:\n  api_key:\n    environment: API_KEY_FROM_ENV\n"),
+    ("list of refs under key",'services:\n  a:\n    environment:\n      API_KEY: ["${A}", "${B}"]\n'),
+    # The *_FILE convention points at a secret rather than carrying one, and
+    # it is the pattern this repo would recommend. Found while checking that
+    # the v7 fix did not break a realistic `secrets:` deployment.
+    ("secret file path",      "services:\n  a:\n    environment:\n      API_KEY_FILE: /run/secrets/api\n"),
+    ("secret path suffix",    "services:\n  a:\n    environment:\n      SIGNING_KEY_PATH: /run/secrets/k\n"),
 ]
 
 
