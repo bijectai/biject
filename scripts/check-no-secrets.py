@@ -63,12 +63,18 @@ SECRET_KEY = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-# Keys that match above but cannot carry the material. Public halves are meant
-# to be committed — biject-trace takes AUDIT_VERIFY_PUBKEY that way. And the
-# `*_FILE` / `*_PATH` convention names *where* a secret lives: `API_KEY_FILE:
-# /run/secrets/api` is the recommended way to feed a container, so flagging it
-# would push people off the safest pattern available.
-PUBLIC_KEY = re.compile(r"(PUBKEY|PUBLIC_KEY|_PUB$|_FILE$|_PATH$|_FILEPATH$)", re.IGNORECASE)
+# Public halves are meant to be committed — biject-trace takes
+# AUDIT_VERIFY_PUBKEY that way — and their material is opaque, so this one is
+# a name-based exemption.
+PUBLIC_KEY = re.compile(r"(PUBKEY|PUBLIC_KEY|_PUB$)", re.IGNORECASE)
+
+# The `*_FILE` / `*_PATH` convention names *where* a secret lives, and
+# `API_KEY_FILE: /run/secrets/api` is the recommended way to feed a container.
+# But the exemption has to be earned by the VALUE, not granted by the name:
+# exempting the name alone let `API_KEY_FILE: sk-live-real` through, which is a
+# credential wearing a path's label.
+LOCATION_KEY = re.compile(r"(_FILE$|_PATH$|_FILEPATH$)", re.IGNORECASE)
+LOOKS_LIKE_PATH = re.compile(r"(^[./~]|/|\.[A-Za-z0-9]{1,6}$)")
 
 # Compose's own `secrets:` section matches SECRET_KEY but declares secrets
 # rather than holding them, so it must not act as an inheriting parent.
@@ -152,6 +158,10 @@ def findings_for(value, key: str, path: str) -> list[str]:
 
     literal = literal_part(value)
     if literal is None:
+        return []
+
+    # A location key is exempt only when it actually holds a location.
+    if LOCATION_KEY.search(key) and LOOKS_LIKE_PATH.search(literal):
         return []
 
     # NEVER print the value. CI logs are retained and readable by anyone who
@@ -274,6 +284,10 @@ UNSAFE = [
     ("v7 map-valued key",     "services:\n  a:\n    environment:\n      DB_PASSWORD: {inner: hunter2}\n"),
     ("v7 nested sequence",    "services:\n  a:\n    environment:\n      AUTH_TOKEN:\n        - nested-secret\n"),
     ("v7 deep nesting",       "services:\n  a:\n    environment:\n      API_KEY:\n        a:\n          b: buried\n"),
+    # v9: the *_FILE exemption added in v7 trusted the name. A credential
+    # wearing a path's label is still a credential.
+    ("v9 _FILE literal",      "services:\n  a:\n    environment:\n      API_KEY_FILE: sk-live-real\n"),
+    ("v9 _PATH literal",      "services:\n  a:\n    environment:\n      SIGNING_KEY_PATH: hunter2secret\n"),
 ]
 
 SAFE = [
@@ -313,6 +327,8 @@ SAFE = [
     # the v7 fix did not break a realistic `secrets:` deployment.
     ("secret file path",      "services:\n  a:\n    environment:\n      API_KEY_FILE: /run/secrets/api\n"),
     ("secret path suffix",    "services:\n  a:\n    environment:\n      SIGNING_KEY_PATH: /run/secrets/k\n"),
+    ("relative secret file",  "services:\n  a:\n    environment:\n      API_KEY_FILE: ./secrets/api.txt\n"),
+    ("bare filename",         "services:\n  a:\n    environment:\n      API_KEY_FILE: apikey.txt\n"),
 ]
 
 

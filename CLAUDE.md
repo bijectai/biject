@@ -380,6 +380,13 @@ people off the safest pattern available. Both are pinned as `SAFE` cases; the se
 caught by testing the fix against a realistic `secrets:` deployment rather than only
 against the reported bypass, which is worth doing every time.
 
+That `*_FILE` exemption then became round eight's bypass, and the mistake is worth
+naming: it was granted by the **key name**, so `API_KEY_FILE: sk-live-real` — a
+credential wearing a path's label — passed. An exemption has to be earned by the value.
+It now applies only when the value actually looks like a path, and both halves are
+pinned. **A guard added to kill a false positive is itself a place a bypass can hide;
+give it its own `UNSAFE` case at the same time as its `SAFE` one.**
+
 Accepted noise: a secret-shaped key holding a URL with embedded references
 (`DB_PASSWORD: ${U}:${P}@host`) is flagged on the leftover `:@host`. A password field
 holding a URL is unusual enough that erring toward flagging is the right side to be
