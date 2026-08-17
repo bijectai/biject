@@ -39,22 +39,41 @@ jobs:
           AUDIT_SIGNING_KEY: ci-placeholder-not-a-real-key
         run: docker compose config -q
 
-      - name: No secret may be committed in the topology
+      - name: No secret may be committed in any compose file
         run: |
           set -euo pipefail
-          # A key written into docker-compose.yml is a committed secret. Values
-          # must arrive from .env, which is gitignored. This looks for a literal
+          # A key written into a compose file is a committed secret. Values must
+          # arrive from .env, which is gitignored. This looks for a literal
           # assignment, not a ${VAR} reference.
           #
+          # Compose accepts two environment syntaxes and BOTH are used in this
+          # repo — the root topology uses mapping form, infra/hetzner/ uses list
+          # form — so both must be matched. Checking only one would let a
+          # plaintext credential through in valid YAML.
+          NAMES='(SIGNING_KEY|API_KEY|_TOKEN|PASSWORD|SECRET)'
+
+          # Mapping form:  KEY: value
           # Anchored to the start of a YAML key. Without the anchor it also
           # matches inside `${VAR:?message}` and `${VAR:-}`, where the character
           # after the colon is part of the default syntax rather than a value.
-          if grep -nE '^[[:space:]]+[A-Z_]*(SIGNING_KEY|API_KEY|_TOKEN|PASSWORD|SECRET)[A-Z_]*:[[:space:]]+[^$[:space:]]' docker-compose.yml; then
-            echo "::error title=Committed secret::a key or token is assigned a literal value in docker-compose.yml."
+          MAPPING="^[[:space:]]+[A-Z_]*${NAMES}[A-Z_]*:[[:space:]]+[^\$[:space:]]"
+
+          # List form:  - KEY=value
+          LIST="^[[:space:]]+-[[:space:]]*[A-Z_]*${NAMES}[A-Z_]*=[^\$[:space:]]"
+
+          found=0
+          while IFS= read -r file; do
+            if grep -nE "$MAPPING|$LIST" "$file"; then
+              echo "::error title=Committed secret::$file assigns a literal value to a key or token."
+              found=1
+            fi
+          done < <(git ls-files '*docker-compose*.yml' '*docker-compose*.yaml' '*compose.yml' '*compose.yaml')
+
+          if [ "$found" -ne 0 ]; then
             echo "Secrets come from .env (gitignored). Put an empty placeholder in .env.example instead."
             exit 1
           fi
-          echo "No literal secrets in the topology."
+          echo "No literal secrets in any compose file."
 
   pins:
     runs-on: ubuntu-latest

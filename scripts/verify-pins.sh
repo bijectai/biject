@@ -6,6 +6,14 @@
 # sha256 digest. A floating tag would make "what is deployed" a question about
 # when someone last pulled, which is exactly what pinning is for.
 #
+# Known limit, deliberately not papered over: a 40-hex git SHA is still a *tag*,
+# and an OCI tag is mutable no matter what it looks like. Anyone who can push to
+# the GHCR package can retarget it, and this check would still say "ok" — it
+# verifies the shape of the reference, not the bytes behind it. Only an
+# @sha256: digest is immutable at the registry. Closing that gap means pinning
+# first-party images as `:<git-sha>@sha256:<digest>`; see CLAUDE.md § Gate
+# conditions for why it has not happened yet.
+#
 # Runs in CI on every PR and is safe to run locally:
 #   ./scripts/verify-pins.sh
 set -euo pipefail

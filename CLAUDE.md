@@ -256,7 +256,10 @@ end; Bedrock and Foundry adapters written, not yet run."
   one deployed is worse than one that reports nothing.
 - `scripts/smoke.sh` — health probes, plus a comparison of each service's reported
   `image_sha` against the pin. `docker compose ps` says a container is healthy; only this
-  says it is the build this repo claims to deploy.
+  says it is the build this repo claims to deploy — and where it *cannot* say that, it
+  now says so. A service pinned with `BIJECT_IMAGE_SHA` that reports no `image_sha`
+  fails; a service carrying no `BIJECT_IMAGE_SHA` at all (`biject-api`, `biject-console`)
+  is listed as NOT VERIFIED in the summary instead of passing silently.
 - `.env.example` — every variable the stack reads. `.env` itself is gitignored.
 
 ## Rules for `docker-compose.yml` *(platform)*
@@ -268,7 +271,10 @@ end; Bedrock and Foundry adapters written, not yet run."
   than what is pinned under the pinned name, which silently defeats the pin.
   `verify-pins.sh` fails on it.
 - **Pin third-party images by digest.** There is no commit to point at, but the
-  principle holds: the tag is a label, the digest is the identity.
+  principle holds: the tag is a label, the digest is the identity. Note that this
+  principle is currently applied *only* to third-party images — first-party services
+  are pinned by git-SHA tag, which is a label too. That inconsistency is real and is
+  recorded under § Gate conditions rather than argued away.
 - **Move pins with the script.** Hand-editing works right up until the day the
   `BIJECT_IMAGE_SHA` beside it is forgotten.
 
@@ -363,6 +369,24 @@ skipped before any model call.
   without it, so the stack will not start. Generate one and put it in `.env` before first
   boot — and note that rotating it later invalidates every prior signature and breaks
   chain continuity, so it needs a migration plan, not a re-roll.
+
+- **First-party images are pinned by tag, and a tag is mutable.** A 40-hex git SHA
+  *looks* immutable but is still an OCI tag: anyone who can push to the GHCR package
+  can retarget it, and the stack would then pull unreviewed content under an unchanged
+  pin. `verify-pins.sh` checks the shape of the reference, not the bytes behind it, and
+  `smoke.sh` cannot catch it either — both sides of its comparison (the compose pin and
+  the container's `BIJECT_IMAGE_SHA`) come from this file, so they agree by construction
+  no matter what image is running.
+
+  The fix is to pin as `ghcr.io/bijectai/<repo>:<git-sha>@sha256:<digest>` — Docker
+  pulls by digest and the tag stays readable, so the diff still names a commit you can
+  look up. It has not been done yet for one concrete reason: the GHCR packages are
+  private, so a digest cannot be resolved without a registry credential, and four of the
+  six images do not exist yet to have a digest at all. Do this when `pin-images.sh` can
+  authenticate to GHCR: have it resolve the manifest digest at pin time and write both,
+  and tighten `verify-pins.sh` to require the `@sha256:` suffix once every service
+  publishes. Until then the guarantee is "immutable by convention, enforced by who holds
+  push access to the package", which is weaker than this file's other pins.
 
 
 ## Knowledge graph
