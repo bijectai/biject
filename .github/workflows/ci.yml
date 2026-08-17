@@ -39,51 +39,30 @@ jobs:
           AUDIT_SIGNING_KEY: ci-placeholder-not-a-real-key
         run: docker compose config -q
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The only dependency either job has. Pinned so the check cannot change
+      # behaviour under us between runs.
+      - run: python3 -m pip install --quiet 'pyyaml==6.0.2'
+
       - name: No secret may be committed in any compose file
         run: |
           set -euo pipefail
-          # A key written into a compose file is a committed secret. Values must
-          # arrive from .env, which is gitignored. This looks for a literal
-          # assignment, not a ${VAR} reference.
+          # Parses the YAML rather than grepping it. This check was a grep three
+          # times and had a hole every time — block sequence, then quoted
+          # entries, then flow style — because YAML spells the same mapping
+          # several legal ways and each pattern covered only the spellings its
+          # author thought of. A parser sees them all as the same data, and
+          # follows anchors and aliases besides. The reasoning is in the
+          # script's docstring.
           #
-          # Compose accepts two environment syntaxes and BOTH are used in this
-          # repo — the root topology uses mapping form, infra/hetzner/ uses list
-          # form — so both must be matched. Checking only one would let a
-          # plaintext credential through in valid YAML.
-          NAMES='(SIGNING_KEY|API_KEY|_TOKEN|PASSWORD|SECRET)'
-
-          # Mapping form:  KEY: value
-          # Anchored to the start of a YAML key. Without the anchor it also
-          # matches inside `${VAR:?message}` and `${VAR:-}`, where the character
-          # after the colon is part of the default syntax rather than a value.
-          MAPPING="^[[:space:]]+[A-Z_]*${NAMES}[A-Z_]*:[[:space:]]+[^\$[:space:]]"
-
-          # List form:  - KEY=value
-          LIST="^[[:space:]]+-[[:space:]]*[A-Z_]*${NAMES}[A-Z_]*=[^\$[:space:]]"
-
-          found=0
-          while IFS= read -r file; do
-            # Quotes are stripped before matching. YAML lets a scalar be quoted
-            # in several places — `- "KEY=v"`, `- 'KEY=v'`, `KEY: "v"` — and
-            # each variant would need its own alternative in the pattern. Trying
-            # to enumerate them is how the previous two versions of this check
-            # both ended up with a hole. Removing the quote characters first
-            # collapses every variant onto the two forms above, and it cannot
-            # create a false positive: a `${VAR}` reference still starts with
-            # `$` after the quotes come off, so it still fails to match.
-            # Line numbers are preserved, so the report still points at the
-            # right line.
-            if tr -d '\042\047' < "$file" | grep -nE "$MAPPING|$LIST"; then
-              echo "::error title=Committed secret::$file assigns a literal value to a key or token."
-              found=1
-            fi
-          done < <(git ls-files '*docker-compose*.yml' '*docker-compose*.yaml' '*compose.yml' '*compose.yaml')
-
-          if [ "$found" -ne 0 ]; then
-            echo "Secrets come from .env (gitignored). Put an empty placeholder in .env.example instead."
-            exit 1
-          fi
-          echo "No literal secrets in any compose file."
+          # Every tracked compose file is checked, not just the root topology:
+          # infra/hetzner/ carries two more.
+          git ls-files -z '*docker-compose*.yml' '*docker-compose*.yaml' \
+                          '*compose.yml' '*compose.yaml' \
+            | xargs -0 python3 scripts/check-no-secrets.py
 
   pins:
     runs-on: ubuntu-latest

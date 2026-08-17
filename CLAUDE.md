@@ -251,6 +251,9 @@ end; Bedrock and Foundry adapters written, not yet run."
 - `docker-compose.yml` — the topology (the root file, not `infra/hetzner/`'s). Every image pinned: biject services to a full
   40-character git SHA, third-party images to a `sha256` digest.
 - `scripts/verify-pins.sh` — enforces that rule. Runs in CI on every PR.
+- `scripts/check-no-secrets.py` — parses every tracked compose file and fails on a
+  literal value under a credential-shaped key. Deliberately a parser, not a pattern;
+  see § CI.
 - `scripts/pin-images.sh` — moves a pin. Updates the image tag **and** the matching
   `BIJECT_IMAGE_SHA` together, because a container that reports a different SHA than the
   one deployed is worse than one that reports nothing.
@@ -295,11 +298,13 @@ The platform half has no test suite — it has no application code. What stands 
 ```
 ./scripts/verify-pins.sh              # every image immutable; no build: stanza
 docker compose config -q              # the file parses and resolves
+git ls-files '*compose*.y*ml' | xargs python3 scripts/check-no-secrets.py
 ./scripts/smoke.sh                    # after `docker compose up -d`
 ```
 
-`verify-pins.sh` and `docker compose config -q` are what CI runs. `smoke.sh` needs a
-running stack and is a local/post-deploy check.
+The first three are what CI runs. `smoke.sh` needs a running stack and is a
+local/post-deploy check. `check-no-secrets.py` needs `pyyaml`; everything else here is
+dependency-free.
 
 The sprint half builds with `cd PolicyEnv && lake build`, which also runs its
 compile-time regression vectors. CI does not run it.
@@ -313,8 +318,19 @@ service standard does not apply — see
 `.claude/deviations/repo-structure-standard.md`.
 
 1. **`compose`** — `docker compose config -q` against a synthetic environment, so a
-   malformed file or an unresolvable variable fails on the PR rather than at deploy.
+   malformed file or an unresolvable variable fails on the PR rather than at deploy;
+   then `scripts/check-no-secrets.py` over every tracked compose file.
 2. **`pins`** — `scripts/verify-pins.sh`. Every image immutable, no `build:` stanza.
+
+`check-no-secrets.py` **parses** the YAML rather than grepping it, and that is the
+load-bearing detail. It was a grep three times and had a bypass every time — block
+sequence, then quoted entries, then flow style — because YAML spells the same mapping
+several legal ways and each pattern only covered the spellings its author had in mind.
+A parser sees every spelling as the same data, follows anchors and aliases, and checks
+the whole document rather than `environment:` alone (a credential in `labels:` or
+`build.args:` is just as committed). A `${VAR}` reference and an empty placeholder are
+the two accepted safe forms. If you find yourself adding a regex alternative here,
+that is the signal to widen the parser instead.
 
 
 ## Automated review
