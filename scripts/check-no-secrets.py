@@ -39,6 +39,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 
@@ -125,8 +126,16 @@ def findings_for(value, key: str, path: str) -> list[str]:
     literal = literal_part(value)
     if literal is None:
         return []
-    shown = literal if len(literal) <= 24 else literal[:24] + "…"
-    return [f"{path} = {shown}"]
+
+    # NEVER print the value. CI logs are retained and readable by anyone who
+    # can see the run, so echoing the credential to stdout would turn one
+    # committed secret into a second, longer-lived exposure — the exact thing
+    # CLAUDE.md §2B.3 forbids, in the tool that exists to enforce it. §2B.3
+    # also names the way out: "emit a key identifier or a fingerprint instead
+    # of the material". The fingerprint is enough to tell two findings apart
+    # and to confirm a fix changed the value, and it is not reversible.
+    digest = hashlib.sha256(literal.encode("utf-8")).hexdigest()[:12]
+    return [f"{path}  (literal, sha256:{digest}, {len(literal)} chars)"]
 
 
 ASSIGNMENT = re.compile(r"(?:^|\s)-{0,2}([A-Za-z_][A-Za-z0-9_.-]*)=(\S*)")
@@ -249,6 +258,35 @@ SAFE = [
 ]
 
 
+def redaction_failures() -> list[str]:
+    """The report must never contain the credential it found.
+
+    A separate assertion rather than another SAFE/UNSAFE row, because this is a
+    property of the *output* and those cases only check the verdict. Round six
+    was exactly this: detection was correct and the finding line echoed the
+    secret into a retained CI log.
+    """
+    canary = "SUPERSECRETVALUE123456789"
+    docs = [
+        f"services:\n  a:\n    environment:\n      API_KEY: {canary}\n",
+        f'services:\n  a:\n    environment:\n      - "API_KEY={canary}"\n',
+        f"services:\n  a:\n    environment:\n      API_KEY: ${{UNSET}}{canary}\n",
+        f"services:\n  a:\n    environment:\n      API_KEY: ${{UNSET:-{canary}}}\n",
+        f"services:\n  a:\n    command: server --api-key={canary}\n",
+    ]
+    out = []
+    for i, doc in enumerate(docs):
+        hits = scan_text(doc)
+        if not hits:
+            out.append(f"redaction case {i} was not detected at all")
+            continue
+        blob = " ".join(hits)
+        # Any run of the canary long enough to be useful counts as a leak.
+        if any(canary[:n] in blob for n in range(8, len(canary) + 1)):
+            out.append(f"redaction case {i} leaked the value into its finding")
+    return out
+
+
 def self_test() -> int:
     failures = 0
     for label, text in UNSAFE:
@@ -260,11 +298,17 @@ def self_test() -> int:
         if hits:
             print(f"  FAIL  false positive: {label} -> {hits}")
             failures += 1
-    total = len(UNSAFE) + len(SAFE)
+    for problem in redaction_failures():
+        print(f"  FAIL  {problem}")
+        failures += 1
+    total = len(UNSAFE) + len(SAFE) + 5
     if failures:
         print(f"\nself-test: {failures}/{total} failed")
         return 1
-    print(f"  self-test ok: {len(UNSAFE)} bypasses caught, {len(SAFE)} safe forms allowed")
+    print(
+        f"  self-test ok: {len(UNSAFE)} bypasses caught, {len(SAFE)} safe forms allowed, "
+        "5 redaction checks clean"
+    )
     return 0
 
 

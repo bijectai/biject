@@ -352,6 +352,19 @@ the process, not a suggestion. The suite has already paid for itself twice: it c
 regression during its own introduction, and it is what makes each new round cost
 minutes instead of a re-audit.
 
+A sixth round found the sharpest one, and it was not a bypass: the checker **printed
+the credential it found**, up to 24 characters, into a retained CI log. Detection was
+correct and the report was the leak — one committed secret turned into a second,
+longer-lived exposure, which is precisely what §2B.3 forbids, in the tool that exists
+to enforce §2B.3. Findings now carry a path, a length, and a `sha256:` prefix and never
+the material, which is the safe path §2B.3 itself prescribes. `--self-test` asserts it
+with a canary across five shapes, because that is a property of the *output* and the
+`SAFE`/`UNSAFE` rows only check the verdict.
+
+The generalizable bit: **a checker's own output is an output surface.** The same applies
+to `verify-pins.sh` and `smoke.sh` if either is ever taught to print a value rather than
+a name.
+
 Accepted noise: a secret-shaped key holding a URL with embedded references
 (`DB_PASSWORD: ${U}:${P}@host`) is flagged on the leftover `:@host`. A password field
 holding a URL is unusual enough that erring toward flagging is the right side to be
