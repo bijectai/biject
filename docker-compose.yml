@@ -25,6 +25,25 @@ services:
       # at IMPORT time when this is unset — there is no ephemeral-key fallback,
       # by design. See README "Before first boot".
       AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY must be set — biject-api will not start without it}
+      # The three below use `:-` (empty when unset) rather than `:?` (refuse to
+      # start), and the difference is deliberate. Empty is not a silent
+      # fallback for any of them — each consumer refuses to operate without a
+      # real value, so the failure surfaces at the feature rather than taking
+      # the whole stack down at boot:
+      #
+      #   ORACLE_SIGNING_KEY  empty -> OracleService raises OracleConfigError,
+      #     the orchestrator's Tier 6 path returns ORACLE_UNAVAILABLE (a
+      #     breach, not an allow), and startup logs it loudly. Tier 6 fails
+      #     CLOSED; every other tier keeps working.
+      #   ANTHROPIC_API_KEY / ARISTOTLE_API_KEY  empty -> the formalizer and
+      #     back-translator raise on use. These drive optional NL-assist paths,
+      #     not verification, so an empty value disables a feature and cannot
+      #     weaken a verdict.
+      #
+      # Promoting any of these to `:?` would make an optional integration a
+      # boot requirement for the whole platform. AUDIT_SIGNING_KEY is `:?`
+      # precisely because it is the opposite case: the ledger cannot exist
+      # without it.
       ORACLE_SIGNING_KEY: ${ORACLE_SIGNING_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ARISTOTLE_API_KEY: ${ARISTOTLE_API_KEY:-}
@@ -89,7 +108,11 @@ services:
     environment:
       AUDIT_LOG_PATH: /app/policy_data/audit.log
       # Public half of AUDIT_SIGNING_KEY. Unset → hash linkage is checked but
-      # signatures are not, and every response says so.
+      # signatures are not, and every response says so: `signatures_checked:
+      # false` plus an explicit note that this proves consistency, not
+      # authenticity. Degraded and announced, never silently downgraded — which
+      # is why `:-` is right here and `:?` would only stop the read-only lens
+      # from starting.
       AUDIT_VERIFY_PUBKEY: ${AUDIT_VERIFY_PUBKEY:-}
       BIJECT_IMAGE_SHA: 8c415d1418d8c32aeb33b29c5b97b1af9d5ca434
     volumes:
