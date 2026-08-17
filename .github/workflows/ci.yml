@@ -63,7 +63,17 @@ jobs:
 
           found=0
           while IFS= read -r file; do
-            if grep -nE "$MAPPING|$LIST" "$file"; then
+            # Quotes are stripped before matching. YAML lets a scalar be quoted
+            # in several places — `- "KEY=v"`, `- 'KEY=v'`, `KEY: "v"` — and
+            # each variant would need its own alternative in the pattern. Trying
+            # to enumerate them is how the previous two versions of this check
+            # both ended up with a hole. Removing the quote characters first
+            # collapses every variant onto the two forms above, and it cannot
+            # create a false positive: a `${VAR}` reference still starts with
+            # `$` after the quotes come off, so it still fails to match.
+            # Line numbers are preserved, so the report still points at the
+            # right line.
+            if tr -d '\042\047' < "$file" | grep -nE "$MAPPING|$LIST"; then
               echo "::error title=Committed secret::$file assigns a literal value to a key or token."
               found=1
             fi
