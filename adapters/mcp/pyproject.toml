@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biject-oc-mcp"
+version = "0.1.0"
+description = "stdio MCP shim exposing biject's verification-proxy OpenClinica tool surface (exactly three tools) to any MCP client."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Official python MCP SDK. 2.x exposes MCPServer; 1.x exposes FastMCP —
+    # server.py imports either.
+    "mcp>=1.9",
+    # Required by the harness signing pipeline (agent/audit_entry.py, S4-A-30)
+    # that the write flow calls. The pipeline itself is imported from the repo
+    # root (PYTHONPATH), not from a package — see README.
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+biject-oc-mcp = "biject_oc_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["biject_oc_mcp*"]

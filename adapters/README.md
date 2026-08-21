@@ -20,12 +20,14 @@ those dependencies must never leak into core's requirements.
 
 The public claim for this directory is exactly:
 
-> Reference integration for OpenAI Agents SDK, validated end to end; Bedrock
-> and Foundry adapters written, not yet run.
+> Reference integration for OpenAI Agents SDK, tested against a mocked proxy,
+> not yet run against a deployed one; MCP shim likewise; Bedrock and Foundry
+> adapters written, not yet run.
 
 | Adapter | Form | Status |
 | --- | --- | --- |
-| `adapters/openai/` | Agents SDK function tools (`tools.py`) | Reference integration, exercised by the OpenClinica 3 demo agent. |
+| `adapters/openai/` | Agents SDK function tools (`tools.py`) | Reference integration; transport pinned by 39 offline tests against a mocked proxy (`test_tools.py`). **Never run against a deployed proxy** — no instance exists yet; the demo runner is `agent/run_demo.py`. |
+| `adapters/mcp/` | biject-oc-mcp MCP stdio server (`biject_oc_mcp/`) exposing the same three tools to any MCP client | Written; 29 offline tests against a mocked proxy + a real stdio round-trip smoke. **Never run against a deployed proxy.** |
 | `adapters/bedrock/` | OpenAPI 3 spec for a Bedrock AgentCore Gateway target (`biject-proxy-tools.openapi.yaml`) + README | **WRITTEN, NOT YET RUN** — never attached to a gateway, never sent a request to a deployed proxy (S4-D-31). |
 | `adapters/foundry/` | OpenAPI 3 spec for an Azure AI Foundry OpenAPI tool (`biject-proxy-tools.openapi.json`) + README | **WRITTEN, NOT YET RUN** — never imported into a Foundry project, never sent a request to a deployed proxy (S4-D-31). |
 
