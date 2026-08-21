@@ -1,3 +1,18 @@
+# The real environment file. Holds AUDIT_SIGNING_KEY and every other secret the
+# stack reads — it must never be committed. .env.example is the tracked template.
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+*.pem
+*.key
+
+# Local-only compose overlays. These can point services at local builds or carry
+# real keys; keep them on disk and out of the repo.
+docker-compose.override.yml
+
 # Lean build artifacts
 PolicyEnv/.lake/
 
@@ -6,10 +21,10 @@ __pycache__/
 *.pyc
 .venv/
 
-# Secrets — env files never committed (placeholders live in *.env.example)
-.env
-*.env
-!*.env.example
-
 # Host-side preflight logs
 preflight-logs/
+
+# Editor
+.DS_Store
+.vscode/
+.idea/

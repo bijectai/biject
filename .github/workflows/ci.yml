@@ -1,0 +1,91 @@
+# CI for the meta repo.
+#
+# Two jobs, not the four the service repos run: there is no application code here
+# and no image to publish. See .claude/deviations/repo-structure-standard.md for
+# why that departure is deliberate rather than an omission.
+#
+# Both jobs are cheap and deterministic, which is the point — a bad pin or a
+# malformed topology should fail on the PR, not at deploy.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: docker-compose.yml must parse and resolve
+        env:
+          # Synthetic values. `config` resolves interpolation without starting
+          # anything, and AUDIT_SIGNING_KEY uses ${VAR:?} so the file
+          # deliberately refuses to resolve without it — supplying a placeholder
+          # here checks the syntax without weakening that guard in .env.example.
+          AUDIT_SIGNING_KEY: ci-placeholder-not-a-real-key
+        run: docker compose config -q
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The only dependency either job has. Pinned so the check cannot change
+      # behaviour under us between runs.
+      - run: python3 -m pip install --quiet 'pyyaml==6.0.2'
+
+      # The checker's own regression suite. It has been bypassed four times, so
+      # every historical bypass is a pinned case and they run before the scan
+      # does — a checker that has quietly stopped checking is worse than none.
+      - name: Secret checker self-test
+        run: python3 scripts/check-no-secrets.py --self-test
+
+      - name: No secret may be committed in any compose file
+        run: |
+          set -euo pipefail
+          # Parses the YAML rather than grepping it. This check was a grep three
+          # times and had a hole every time — block sequence, then quoted
+          # entries, then flow style — because YAML spells the same mapping
+          # several legal ways and each pattern covered only the spellings its
+          # author thought of. A parser sees them all as the same data, and
+          # follows anchors and aliases besides. The reasoning is in the
+          # script's docstring.
+          #
+          # Every tracked compose file is checked, not just the root topology:
+          # infra/hetzner/ carries two more.
+          git ls-files -z '*docker-compose*.yml' '*docker-compose*.yaml' \
+                          '*compose.yml' '*compose.yaml' \
+            | xargs -0 python3 scripts/check-no-secrets.py
+
+  pins:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Every image must be pinned to something immutable
+        run: ./scripts/verify-pins.sh
+
+      - name: Shell scripts must parse
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            bash -n "$f"
+            echo "  ok  $f"
+          done
