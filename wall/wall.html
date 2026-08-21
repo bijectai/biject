@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>biject verdict wall</title>
+<style>
+  /* Self-contained: system font stack only, no external assets, no CDNs. */
+  :root {
+    --bg: #0b0e14;
+    --panel: #121724;
+    --panel-2: #0e1320;
+    --line: #232b3d;
+    --text: #e8ecf4;
+    --dim: #8b94a8;
+    --green: #3fdc82;
+    --green-dim: #123522;
+    --red: #ff5d5d;
+    --red-dim: #3a1420;
+    --amber: #ffb84d;
+    --amber-dim: #3a2a10;
+    --blue: #5aa7ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* Projector-sized base type: scales with the wall it is thrown on. */
+  html { font-size: clamp(15px, 1.15vw, 24px); }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+    padding: 1.1rem 1.6rem 0.9rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+  header h1 {
+    font-size: 1.9rem;
+    letter-spacing: 0.04em;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  header h1 .brand { color: var(--blue); }
+  .tagline {
+    font-size: 1.05rem;
+    color: var(--dim);
+    flex: 1 1 auto;
+    min-width: 16rem;
+  }
+  .hud {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 1rem;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    background: var(--panel);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .chip b { font-size: 1.15rem; }
+  .chip .lbl { color: var(--dim); font-size: 0.85rem; letter-spacing: 0.05em; }
+  .chip.proved b { color: var(--green); }
+  .chip.refuted b { color: var(--red); }
+  .chip.skipped b { color: var(--amber); }
+  .chip.denied b { color: var(--red); }
+  .chip.queries b { color: var(--blue); }
+  .chip.queries.stale b { opacity: 0.45; }
+
+  .dot {
+    width: 0.8rem; height: 0.8rem;
+    border-radius: 50%;
+    background: var(--dim);
+    flex: none;
+  }
+  .dot.live { background: var(--green); box-shadow: 0 0 0.6rem var(--green); }
+  .dot.reconnecting { background: var(--amber); animation: pulse 1s infinite; }
+  .dot.polling { background: var(--blue); animation: pulse 2.5s infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+
+  main { flex: 1 1 auto; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    text-align: left;
+    font-size: 0.8rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    position: sticky; top: 0;
+    white-space: nowrap;
+  }
+  thead th .unit {
+    display: block;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    font-size: 0.72rem;
+    color: var(--dim);
+    opacity: 0.8;
+  }
+  tbody td {
+    padding: 0.55rem 0.9rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 1.05rem;
+    vertical-align: baseline;
+    white-space: nowrap;
+  }
+  td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+  td.time { font-family: var(--mono); color: var(--dim); font-size: 0.95rem; }
+  td.ident { font-family: var(--mono); font-size: 0.98rem; overflow: hidden; text-overflow: ellipsis; max-width: 14rem; }
+
+  .badge {
+    display: inline-block;
+    min-width: 6.2rem;
+    text-align: center;
+    padding: 0.18rem 0.65rem;
+    border-radius: 0.45rem;
+    font-weight: 800;
+    font-size: 1.05rem;
+    letter-spacing: 0.06em;
+  }
+  .badge.proved  { color: var(--green); background: var(--green-dim); border: 1px solid var(--green); }
+  .badge.refuted { color: var(--red);   background: var(--red-dim);   border: 1px solid var(--red); }
+  .badge.skipped { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber); }
+  .badge.denied  { color: var(--red);   background: var(--red-dim);   border: 1px dashed var(--red); }
+
+  tr.detail td {
+    white-space: pre-wrap;
+    font-family: var(--mono);
+    font-size: 0.92rem;
+    color: var(--dim);
+    background: var(--panel-2);
+    padding: 0.45rem 0.9rem 0.7rem 2.2rem;
+    border-bottom: 1px solid var(--line);
+  }
+  tr.detail td .verdict-word { font-weight: 800; }
+  tr.detail.refuted td .verdict-word { color: var(--red); }
+  tr.detail.denied td .verdict-word { color: var(--red); }
+  mark.tok {
+    background: var(--amber-dim);
+    color: var(--amber);
+    border-radius: 0.2rem;
+    padding: 0 0.15rem;
+    font-weight: 700;
+  }
+  tr.event.fresh { animation: flash 0.9s ease-out; }
+  @keyframes flash { from { background: #1b2436; } to { background: transparent; } }
+
+  .empty {
+    padding: 3rem 1.6rem;
+    color: var(--dim);
+    font-size: 1.2rem;
+    text-align: center;
+  }
+
+  footer {
+    padding: 0.7rem 1.6rem;
+    border-top: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--dim);
+    font-size: 0.9rem;
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+  }
+  footer .claim { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="brand">biject</span> · VERDICT WALL</h1>
+  <div class="tagline">Every write gated by a kernel-checked audit bound</div>
+  <div class="hud">
+    <span class="chip proved"><b id="n-proved">0</b><span class="lbl">PROVED</span></span>
+    <span class="chip refuted"><b id="n-refuted">0</b><span class="lbl">REFUTED</span></span>
+    <span class="chip skipped"><b id="n-skipped">0</b><span class="lbl">SKIPPED</span></span>
+    <span class="chip denied"><b id="n-denied">0</b><span class="lbl">DENIED</span></span>
+    <span class="chip queries" id="chip-queries"
+          title="open-query source not configured — pass ?queries_url=<URL> to enable">
+      <b id="n-queries">&mdash;</b><span class="lbl">OPEN QUERIES</span>
+    </span>
+    <span class="chip" id="chip-stream">
+      <span class="dot" id="stream-dot"></span>
+      <span class="lbl" id="stream-label">connecting&hellip;</span>
+    </span>
+  </div>
+</header>
+
+<main>
+  <table>
+    <thead>
+      <tr>
+        <th>time</th>
+        <th>verdict</th>
+        <th>tool</th>
+        <th>agent</th>
+        <th>policy</th>
+        <th>kernel elab_us<span class="unit">&micro;s</span></th>
+        <th>verify latency_us<span class="unit">&micro;s</span></th>
+        <th>proxy total<span class="unit">total_latency_us &rarr; ms</span></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="empty" id="empty">waiting for the first verdict event&hellip;</div>
+</main>
+
+<footer>
+  <span class="claim">PROVED = the supplied structured parameters satisfy a kernel-checked predicate.</span>
+  <span>Advisory feed, in-memory on biject-trace &mdash; the signed ledger at /v1/entries is the record.</span>
+</footer>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ config */
+// TRACE_BASE defaults to the same-origin path /trace (nginx proxies
+// /trace/ -> http://biject-trace:8010/). Override with ?trace=<base URL>.
+const params = new URLSearchParams(location.search);
+const TRACE_BASE = (params.get("trace") || "/trace").replace(/\/+$/, "");
+// Open-query counter is config-driven and optional: only polled when
+// ?queries_url= is supplied. Unconfigured, the slot renders an em dash.
+const QUERIES_URL = params.get("queries_url") || null;
+
+const MAX_ROWS = 60;          // events kept in the DOM
+const POLL_MS = 5000;         // fallback poll cadence
+const QUERIES_POLL_MS = 10000;
+const INITIAL_LIMIT = 50;
+
+/* ------------------------------------------------------------------- state */
+const rowsEl = document.getElementById("rows");
+const emptyEl = document.getElementById("empty");
+const tallies = { proved: 0, refuted: 0, skipped: 0, denied: 0 };
+const seen = new Set();       // dedupe keys, bounded
+const seenOrder = [];
+let eventCount = 0;
+
+/* ----------------------------------------------------------- verdict logic */
+// Display mapping. Renaming wire "allowed"/"blocked" to PROVED/REFUTED is
+// the ONLY renaming performed; "skipped" keeps its wire word.
+//   allowed + forwarded        -> PROVED
+//   blocked                    -> REFUTED  (with the failed clause from lean_trace)
+//   skipped                    -> SKIPPED
+//   verdict null               -> DENIED   (proxy denied without a verdict; deny_reason shown)
+//   allowed but NOT forwarded  -> DENIED   (verdict obtained, call still not forwarded)
+function classify(e) {
+  if (e.verdict === "blocked") return { label: "REFUTED", cls: "refuted" };
+  if (e.verdict === "skipped") return { label: "SKIPPED", cls: "skipped" };
+  if (e.verdict === "allowed" && e.forwarded === true) return { label: "PROVED", cls: "proved" };
+  return { label: "DENIED", cls: "denied" };
+}
+
+/* ------------------------------------------------------------- lean_trace */
+// Predicate clause names worth highlighting when they appear in a trace.
+const TOKEN_RE = /\b(notBackdated|reasonCodeValid|sigOk|digestShapeOk|genesisConsistent|AuditEntryValid|actionInRange|valueHashOk)\b/g;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+// Pull the most informative excerpt out of a lean_trace: prefer the lines
+// that mention a failure, else the head of the trace.
+function traceExcerpt(trace) {
+  if (!trace) return "";
+  const lines = String(trace).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const failing = lines.filter(l => /fail|refut|false/i.test(l));
+  let picked = (failing.length ? failing : lines).slice(0, 2).join("  ·  ");
+  if (picked.length > 240) picked = picked.slice(0, 240) + "…";
+  return picked;
+}
+
+function highlightTokens(escaped) {
+  return escaped.replace(TOKEN_RE, '<mark class="tok">$1</mark>');
+}
+
+/* --------------------------------------------------------------- rendering */
+function fmtUs(v) {
+  return (typeof v === "number") ? v.toLocaleString("en-US") : "—";
+}
+function fmtTotalMs(us) {
+  return (typeof us === "number") ? (us / 1000).toFixed(1) : "—";
+}
+function fmtTime(e) {
+  const ms = (typeof e.ts_unix_ms === "number") ? e.ts_unix_ms : e.received_unix_ms;
+  if (typeof ms !== "number") return "—";
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function bumpTally(cls) {
+  tallies[cls] += 1;
+  document.getElementById("n-" + cls).textContent = tallies[cls];
+}
+
+function detailHtml(e, v) {
+  // Denials render "<VERDICT>: <clause>" — the clause, never a paraphrase.
+  if (v.cls === "refuted") {
+    const excerpt = traceExcerpt(e.lean_trace) || "(no lean_trace supplied)";
+    return `<span class="verdict-word">REFUTED:</span> ${highlightTokens(escapeHtml(excerpt))}`;
+  }
+  if (v.cls === "denied") {
+    const reason = e.deny_reason ? escapeHtml(e.deny_reason) : "no verdict obtained";
+    let html = `<span class="verdict-word">DENIED:</span> ${reason}`;
+    const excerpt = traceExcerpt(e.lean_trace);
+    if (excerpt) html += `  ·  ${highlightTokens(escapeHtml(excerpt))}`;
+    return html;
+  }
+  return null;
+}
+
+function addEvent(e) {
+  const key = `${e.seq}:${e.received_unix_ms}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  seenOrder.push(key);
+  if (seenOrder.length > 600) seen.delete(seenOrder.shift());
+
+  const v = classify(e);
+  bumpTally(v.cls);
+  emptyEl.style.display = "none";
+
+  const tr = document.createElement("tr");
+  tr.className = "event fresh";
+  const cells = [
+    ["time", fmtTime(e)],
+    ["", null],  // badge cell, built below
+    ["ident", e.tool_name || "—"],
+    ["ident", e.agent_id || "—"],
+    ["ident", e.policy_id || "—"],
+    ["num", fmtUs(e.elab_us)],
+    ["num", fmtUs(e.latency_us)],
+    ["num", fmtTotalMs(e.total_latency_us)],
+  ];
+  cells.forEach(([cls, text], i) => {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    if (i === 1) {
+      const b = document.createElement("span");
+      b.className = "badge " + v.cls;
+      b.textContent = v.label;
+      td.appendChild(b);
+    } else {
+      td.textContent = text;
+    }
+    tr.appendChild(td);
+  });
+
+  let detailTr = null;
+  const dh = detailHtml(e, v);
+  if (dh) {
+    detailTr = document.createElement("tr");
+    detailTr.className = "detail " + v.cls;
+    const td = document.createElement("td");
+    td.colSpan = 8;
+    td.innerHTML = dh;   // built exclusively from escaped strings above
+    detailTr.appendChild(td);
+  }
+
+  // Newest on top.
+  if (detailTr) rowsEl.prepend(detailTr);
+  rowsEl.prepend(tr);
+  eventCount += 1;
+
+  // Trim from the bottom, keeping event/detail rows paired.
+  while (eventCount > MAX_ROWS) {
+    let last = rowsEl.lastElementChild;
+    if (last && last.classList.contains("detail")) { last.remove(); last = rowsEl.lastElementChild; }
+    if (last) last.remove();
+    eventCount -= 1;
+  }
+}
+
+/* ---------------------------------------------------- stream connectivity */
+const dotEl = document.getElementById("stream-dot");
+const labelEl = document.getElementById("stream-label");
+function setStreamState(state, label) {
+  dotEl.className = "dot " + state;
+  labelEl.textContent = label;
+}
+
+let pollTimer = null;
+let sseOpen = false;
+
+async function fetchRecent() {
+  const r = await fetch(`${TRACE_BASE}/v1/verdicts?limit=${INITIAL_LIMIT}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`recent fetch: ${r.status}`);
+  const data = await r.json();
+  // /v1/verdicts is newest-first; insert oldest-first so prepending keeps order.
+  const events = Array.isArray(data.events) ? data.events : [];
+  for (let i = events.length - 1; i >= 0; i--) addEvent(events[i]);
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    if (sseOpen) { stopPolling(); return; }
+    try {
+      await fetchRecent();
+      if (!sseOpen) setStreamState("polling", "polling /v1/verdicts");
+    } catch {
+      setStreamState("reconnecting", "trace unreachable — retrying");
+    }
+  }, POLL_MS);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function startStream() {
+  if (typeof EventSource === "undefined") {
+    setStreamState("polling", "polling /v1/verdicts (no SSE)");
+    startPolling();
+    return;
+  }
+  const es = new EventSource(`${TRACE_BASE}/v1/verdicts/stream?replay=${INITIAL_LIMIT}`);
+  es.onopen = () => {
+    sseOpen = true;
+    stopPolling();
+    setStreamState("live", "SSE connected");
+  };
+  es.onmessage = (msg) => {
+    try { addEvent(JSON.parse(msg.data)); } catch { /* malformed frame: skip */ }
+  };
+  es.onerror = () => {
+    sseOpen = false;
+    setStreamState("reconnecting", "SSE reconnecting");
+    startPolling();   // EventSource keeps retrying; polling covers the gap
+  };
+}
+
+/* ------------------------------------------------------ open-query counter */
+const chipQueries = document.getElementById("chip-queries");
+const nQueries = document.getElementById("n-queries");
+
+function startQueriesPoll() {
+  if (!QUERIES_URL) return;  // slot stays "—" with its tooltip
+  chipQueries.title = "open queries, polled from " + QUERIES_URL;
+  const poll = async () => {
+    try {
+      const r = await fetch(QUERIES_URL, { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      let n = null;
+      if (d && typeof d.open_query_count === "number") n = d.open_query_count;
+      else if (d && Array.isArray(d.queries)) n = d.queries.length;
+      else if (Array.isArray(d)) n = d.length;
+      if (n === null) throw new Error("unrecognized shape");
+      nQueries.textContent = String(n);
+      chipQueries.classList.remove("stale");
+    } catch {
+      // Degrade quietly: dim the chip, keep the last value, never touch the stream.
+      chipQueries.classList.add("stale");
+      chipQueries.title = "open-query source unreachable — last value shown";
+    }
+  };
+  poll();
+  setInterval(poll, QUERIES_POLL_MS);
+}
+
+/* -------------------------------------------------------------------- boot */
+setStreamState("reconnecting", "connecting…");
+fetchRecent().catch(() => { /* initial fill can fail; stream/polling recover */ });
+startStream();
+startQueriesPoll();
+</script>
+</body>
+</html>
