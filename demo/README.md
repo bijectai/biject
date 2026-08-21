@@ -73,6 +73,18 @@ Save the output: it becomes demo pass 2b, the live answer to "couldn't the
 agent just call OpenClinica directly?". Never run the demo without a fresh
 pass.
 
+## What pass 2 demonstrates live vs narrates (accepted limitation)
+
+Pass 2 **demonstrates the `notBackdated` clause live** (the agent can supply
+`ts_unix_ms`; a backdated value is signed honestly and the kernel refutes it)
+and **narrates the `reasonCodeValid` clause**: `reason_code` is a required
+integer on the tool surface, so the agent has no way to submit a missing or
+invalid reason code. That clause is demonstrated offline by the harness's
+out-of-range-reason test, and the presenter says so — the narration is part
+of the script, not an apology. This is an accepted limitation by decision
+(2026-08-21), not a gap to close: do not add a contrived second REFUTE path
+to make both clauses fire live.
+
 ## Recovery moves (from the demo runbook)
 
 | If | Then |

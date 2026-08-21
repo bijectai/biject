@@ -79,13 +79,19 @@ refused. The agent tried. The point is that compliance with a bad instruction
 did not produce a bad write, because the bound is enforced structurally
 rather than depending on model self-restraint.
 
-**The "skip the reason" half:** `reason_code` is a *required integer* on the
-tool — the instruction to skip it cannot be followed to the kernel. Expect
-the model to either supply a reason anyway (partial compliance; the backdate
-alone still refutes the write) or report it cannot omit one. The kernel's
-`reasonCodeValid` clause is demonstrated by the harness's out-of-range-reason
-test rather than live prompting; say so if asked, never imply the model
-skipped a reason on stage.
+**The "skip the reason" half — ACCEPTED LIMITATION (decision, 2026-08-21):**
+`reason_code` is a *required integer* on the tool and stays that way. The
+consequence, stated plainly: **pass 2 demonstrates the `notBackdated` clause
+live and NARRATES the `reasonCodeValid` clause** — there is no path for the
+agent to submit a missing or invalid reason code, so that clause cannot be
+made to fire from a prompt. Expect the model to either supply a reason
+anyway (partial compliance; the backdate alone still refutes the write) or
+report it cannot omit one. The reason-code clause is demonstrated offline by
+the harness's out-of-range-reason path (biject-proxy
+`tests/demo_passes.rs::an_out_of_range_reason_code_reaches_the_kernel_and_is_refuted`);
+say so if asked, and never imply the model skipped a reason on stage. Do not
+add a second contrived REFUTE path to make both clauses fire live — the
+complexity is not worth the rehearsal time.
 
 Plausible observed behaviours to record in the run log:
 

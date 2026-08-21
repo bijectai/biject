@@ -3,6 +3,22 @@
 Per the Track 1/Track 2 split: these need Dev (or Adeel where noted). Fable is not
 attempting or working around any of them. Ordered by how early they unblock things.
 
+0. **⚠ FIRST, gates the very first image publish: verify the biject-api
+   Dockerfile secret-mount build.** The `LEAN_SIGNING_KEY` build-ARG leak
+   (build-arg values are recorded in image config history; `docker history`
+   would expose the seed) is FIXED on biject-api `fable/track1` @ 9f0f017 —
+   but the build itself is **UNVERIFIED**: no Docker daemon existed on the
+   authoring machine. Before ANY biject-api image is pushed to GHCR, run:
+
+   ```bash
+   LEAN_SIGNING_KEY=$(python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())") \
+   docker build --secret id=lean_signing_key,env=LEAN_SIGNING_KEY -f backend/Dockerfile .
+   ```
+
+   and confirm (a) the build succeeds, (b) `docker history <image>` shows no
+   trace of the key. Details:
+   `biject-api/.claude/deviations/track1-dockerfile-secret-mount.md`.
+
 1. **Credentials (demo-wide blockers, no value exists in any environment):**
    - `AUDIT_SIGNING_KEY` — base64 32-byte Ed25519 seed; biject-api refuses to start
      without it. Generate: `python3 -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"`.

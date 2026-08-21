@@ -139,10 +139,19 @@ is a `PIN_ME_40CHAR_GIT_SHA` placeholder. Pin each to the SHA its repo's CI
 published (convention: `scripts/pin-images.sh` in the meta repo — for this
 file edit by hand, keeping `image:` tag and `BIJECT_IMAGE_SHA` identical per
 service). Resolve the third-party digests (`traefik`, `postgres`) with
-`docker buildx imagetools inspect <tag>`. Note (meta-repo CLAUDE.md gate
-conditions): as of the last check only biject-proxy and biject-console images
-exist; biject-api has no publish workflow yet — that is a hard blocker for
-this stack and is tracked upstream, not here.
+`docker buildx imagetools inspect <tag>`. biject-api's publish workflow was
+authored on its `fable/track1` branch (merge + provision `LEAN_SIGNING_KEY`
+before an image exists; the Dockerfile secret-mount build must be verified
+first — top item in `.claude/handoff/track2-human-gated.md`).
+
+**⚠ IMAGE ORDERING REQUIREMENT — api before (or alongside) proxy.** The
+Track 1 ledger-head fix couples the two images deliberately: the proxy
+(`fable/track1` @ 4115db6 or later) requires `head_ts_unix_ms` on
+biject-api's `/api/audit/head` (`fable/track1` @ b4eb021 or later) and
+**refuses every write** with `ledger_head_unavailable` when it is absent.
+Pin/deploy the new biject-api image BEFORE or TOGETHER WITH the new proxy
+image — an old api + new proxy fails closed on all writes. Correct behavior,
+but not something to discover live.
 
 **b. Up:**
 
