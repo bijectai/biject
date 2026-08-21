@@ -1,0 +1,95 @@
+#!/usr/sbin/nft -f
+# =============================================================================
+# oc-ingress.nft — host-level nftables lockdown for EC2 #1
+# (biject-enforcement). AWS port of infra/hetzner/firewall/oc-ingress.nft
+# (S4-D-21).
+#
+# ENFORCEMENT MODEL
+# -----------------
+# The demo's security bound is the NETWORK layer: nothing reaches OpenClinica
+# except through the verification proxy (plus the documented, presenter-only
+# traefik UI route). On AWS that bound has three layers:
+#
+#   1. Security groups (terraform): instance boundary. The agent host can
+#      reach EC2 #1 on :443 only; no 8080/5432 anywhere.
+#   2. DOCKER-USER rules (./docker-user-rules.sh): container-forwarded
+#      traffic. THE reliable hook when Docker is in play — see that file.
+#   3. THIS FILE: host-namespace defense-in-depth. Covers published ports
+#      hitting the host, processes outside Docker, and operator mistakes
+#      (e.g. `network_mode: host`). Keep it applied even though layer 2 does
+#      the day-to-day work.
+#
+# AWS-PORT DELTAS (mirror docker-user-rules.sh):
+#   * Subnet/IP pins match infra/aws/compose/enforcement/docker-compose.yml
+#     ipam (172.29.x, not the Hetzner 172.28.x). Change them together.
+#   * No agent egress rules here — the agent is a separate EC2 governed by
+#     sg-agent.
+#   * traefik (.20) is allowed to OC :8080 for the presenter-gated UI route.
+#   * proxy (.10) is allowed to OC :8080 only, NOT :5432 (tightened from the
+#     Hetzner original — the proxy has no business talking to Postgres).
+#
+# PARAMETERS — keep in sync with docker-user-rules.sh and the compose ipam.
+# =============================================================================
+
+# --- addressing (compose: networks edge / kernel / edc) ----------------------
+define EDGE_SUBNET      = 172.29.99.0/24    # docker network "edge"
+define KERNEL_SUBNET    = 172.29.98.0/24    # docker network "kernel"
+define EDC_SUBNET       = 172.29.100.0/24   # docker network "edc" (internal)
+define PROXY_EDC_IP     = 172.29.100.10     # biject-proxy on edc (pinned)
+define TRAEFIK_EDC_IP   = 172.29.100.20     # traefik on edc (pinned, UI route)
+
+# --- service ports -----------------------------------------------------------
+define OC_HTTP_PORT     = 8080              # OpenClinica (Tomcat) HTTP
+define PG_PORT          = 5432              # Postgres backing OC
+
+# Idempotent apply: drop any previous version of our table, then recreate.
+table inet biject_lockdown
+delete table inet biject_lockdown
+
+table inet biject_lockdown {
+
+    # -------------------------------------------------------------------------
+    # INGRESS PROTECTION FOR OC + POSTGRES (forwarded path)
+    # -------------------------------------------------------------------------
+    chain forward {
+        # priority -5: run BEFORE Docker's own forward rules (priority 0) so a
+        # permissive Docker rule can never out-rank the lockdown.
+        type filter hook forward priority -5; policy accept;
+
+        # Established flows that we already admitted keep working.
+        ct state established,related accept
+
+        # (1) proxy -> OC: the sanctioned write/read path. :8080 only.
+        ip saddr $PROXY_EDC_IP ip daddr $EDC_SUBNET tcp dport $OC_HTTP_PORT accept
+
+        # (2) traefik -> OC: the presenter-gated UI route. :8080 only.
+        ip saddr $TRAEFIK_EDC_IP ip daddr $EDC_SUBNET tcp dport $OC_HTTP_PORT accept
+
+        # (3) Intra-EDC traffic (OC <-> Postgres) stays allowed: both peers
+        #     live on the internal edc network only.
+        ip saddr $EDC_SUBNET ip daddr $EDC_SUBNET accept
+
+        # (4) Everything else aimed at the EDC subnet is logged for the audit
+        #     trail and dropped.
+        ip daddr $EDC_SUBNET log prefix "biject-oc-ingress-drop: " counter drop
+    }
+
+    # -------------------------------------------------------------------------
+    # HOST-DESTINED TRAFFIC (published ports, host-namespace services)
+    # -------------------------------------------------------------------------
+    chain input {
+        type filter hook input priority -5; policy accept;
+
+        ct state established,related accept
+        iif lo accept
+
+        # If OC's or Postgres's port was ever accidentally published on the
+        # host (`ports:` in compose), only the proxy/traefik container IPs may
+        # use it; everyone else is logged + dropped. Nobody outside the box
+        # should ever see these — the SG drops them first, this is the second
+        # opinion.
+        ip saddr $PROXY_EDC_IP tcp dport { $OC_HTTP_PORT, $PG_PORT } accept
+        ip saddr $TRAEFIK_EDC_IP tcp dport $OC_HTTP_PORT accept
+        tcp dport { $OC_HTTP_PORT, $PG_PORT } log prefix "biject-oc-host-drop: " counter drop
+    }
+}

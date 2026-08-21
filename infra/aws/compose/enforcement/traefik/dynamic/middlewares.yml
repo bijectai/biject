@@ -1,0 +1,37 @@
+# =============================================================================
+# Traefik DYNAMIC configuration (file provider, hot-reloaded) — AWS port.
+# Adapted from infra/hetzner/traefik/dynamic/middlewares.yml (S4-D-10).
+#
+# Shared middlewares + TLS options referenced from docker labels as
+# `<name>@file` (e.g. `security-headers@file`). Middlewares whose values come
+# from .env (the OC presenter ipAllowList, optional basic-auth) are defined
+# via docker labels in ../../docker-compose.yml instead, because this static
+# file cannot see compose's .env interpolation.
+# =============================================================================
+
+http:
+  middlewares:
+    # Baseline hardening for every internet-facing router in the demo.
+    security-headers:
+      headers:
+        stsSeconds: 31536000            # HSTS: 1 year
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        frameDeny: true
+        browserXssFilter: true
+        referrerPolicy: "no-referrer-when-downgrade"
+
+    # Utility "block everything" middleware: an allow-list containing only a
+    # non-routable address yields 403 for all real clients. Belt-and-braces
+    # option on top of the !PathPrefix(`/OpenClinica-ws`) router exclusion.
+    deny-all:
+      ipAllowList:
+        sourceRange:
+          - "255.255.255.255/32"
+
+tls:
+  options:
+    # Applied by default to all TLS routers on this entrypoint set.
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true

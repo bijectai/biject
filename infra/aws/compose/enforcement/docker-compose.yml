@@ -1,0 +1,413 @@
+# =============================================================================
+# infra/aws/compose/enforcement — the demo topology on EC2 #1
+# ("biject-enforcement"). AWS port of the Hetzner skeleton
+# (infra/hetzner/docker-compose.yml + openclinica/), merged into ONE compose
+# project per the target architecture, with the platform services wired in.
+#
+# Bring-up (plain docker compose; no Coolify on the AWS port):
+#     cd /opt/biject/infra/aws/compose/enforcement
+#     cp .env.example .env && chmod 600 .env     # then fill in real values
+#     docker compose up -d
+#
+# -----------------------------------------------------------------------------
+# NETWORK TOPOLOGY = THE ENFORCEMENT BOUNDARY
+# -----------------------------------------------------------------------------
+#
+#   edge   (172.29.99.0/24)  — traefik, biject-proxy, wall, biject-trace
+#   kernel (172.29.98.0/24)  — biject-proxy, biject-api, redis, biject-trace
+#   edc    (172.29.100.0/24) — biject-proxy, openclinica, oc-db  [internal!]
+#
+#   * biject-proxy is the ONLY service attached to BOTH kernel and edc: every
+#     write to the EDC must traverse it, and it forwards only after biject-api
+#     returns an `allowed` verdict for the typed parameters. That is the
+#     enforcement boundary, implemented at the Docker network layer, not by
+#     convention.
+#   * `edc` is `internal: true`: OpenClinica and its Postgres have no host
+#     ports, no outbound internet, and no reachability except from other
+#     members of the network.
+#   * Documented exception (carried over from Hetzner, same rationale):
+#     traefik ALSO attaches to `edc`, solely to route the OC web UI to the
+#     presenter (router `oc.<domain>`, ipAllowList = PRESENTER_IP only, SOAP
+#     path excluded via !PathPrefix). Remove traefik from `edc` and the
+#     oc.<domain> router to make the enclave reachable only via the proxy.
+#     The task's network table lists edc = {proxy, openclinica, oc-db};
+#     traefik's attachment is this documented exception, without which the
+#     oc.<domain> router cannot reach Tomcat at all.
+#   * biject-trace joins kernel (shares the ledger volume read-only, receives
+#     the proxy's verdict emissions) AND edge (so the wall can query it for
+#     its feed). It is on neither edc nor any decision path.
+#
+# The ipam subnets and the static IPs pinned below are load-bearing: the
+# on-host firewall (../../firewall/docker-user-rules.sh + oc-ingress.nft)
+# references them. Change them together or not at all.
+#
+# -----------------------------------------------------------------------------
+# IMAGE PINS
+# -----------------------------------------------------------------------------
+# !! EVERY `PIN_ME_…` BELOW IS A PLACEHOLDER AND WILL NOT PULL !!
+# First-party images are pinned to a full 40-char git SHA — the tag each
+# service repo's CI publishes on merge to main. The convention, and the tool
+# that moves a pin together with its BIJECT_IMAGE_SHA, is the meta repo's
+# scripts/pin-images.sh (it currently targets the root docker-compose.yml;
+# for this file, edit both lines of a service by hand THE SAME WAY: image tag
+# and BIJECT_IMAGE_SHA must always change together). Third-party images are
+# pinned by sha256 digest — the tag is a label, the digest is the identity.
+# =============================================================================
+
+networks:
+  edge:
+    name: biject-edge
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.99.0/24
+
+  kernel:
+    name: biject-kernel
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.98.0/24
+
+  edc:
+    name: biject-edc
+    driver: bridge
+    internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.100.0/24
+
+volumes:
+  # Let's Encrypt account + issued certs. Must persist across restarts or you
+  # will hit LE rate limits re-issuing on every deploy.
+  traefik_acme:
+    name: biject-traefik-acme
+  # The signed, hash-chained audit ledger. Written only by biject-api;
+  # mounted read-only into biject-trace.
+  policy_data:
+    name: biject-policy-data
+  # OpenClinica persistence (acceptance criterion: survives down/redeploys).
+  oc_pgdata:
+    name: biject-oc-pgdata
+  oc_data:
+    name: biject-oc-data
+
+services:
+  # ===========================================================================
+  # traefik — the only component with published host ports (80/443).
+  # v3 rule syntax required (the oc router depends on !PathPrefix negation).
+  # Three routers on :443, all defined as labels on their services:
+  #   proxy.<domain> -> biject-proxy   (agent tool calls + presenter curl)
+  #   wall.<domain>  -> wall           (the live verdict wall)
+  #   oc.<domain>    -> openclinica    (UI only; ipAllowList = PRESENTER_IP)
+  # ===========================================================================
+  traefik:
+    # Third-party pin convention: tag@sha256:digest. Resolve the digest at
+    # deploy time (`docker buildx imagetools inspect traefik:v3.1`) — this
+    # placeholder will not pull as written.
+    image: traefik:v3.1@sha256:PIN_ME_TRAEFIK_DIGEST
+    restart: unless-stopped
+    ports:
+      - "80:80"    # ACME HTTP-01 + permanent redirect only (SG-gated by enable_acme_http01)
+      - "443:443"  # HTTPS — everything else
+    networks:
+      edge: {}
+      # Documented UI-only exception — see file header. Static IP pinned so
+      # the firewall can allow exactly traefik -> openclinica:8080.
+      edc:
+        ipv4_address: 172.29.100.20
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL:?set ACME_EMAIL in .env (see .env.example)}
+    volumes:
+      # Read-only Docker socket for service discovery (exposedByDefault=false,
+      # so only explicitly labeled containers are ever routed).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Static config TEMPLATE (rendered at start — see entrypoint below).
+      - ./traefik/traefik.yml:/etc/traefik/traefik.template.yml:ro
+      # Dynamic config (middlewares, TLS options) — file provider, hot-reloaded.
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/letsencrypt
+    # Same template-render trick as the Hetzner original: Traefik cannot merge
+    # static config from file + env, so ACME_EMAIL is sed-rendered at start.
+    # `$${...}` is compose-escaping — expanded by the container shell at
+    # runtime, not at compose-parse time.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed "s|__ACME_EMAIL__|$${ACME_EMAIL}|g" /etc/traefik/traefik.template.yml > /tmp/traefik.yml
+        exec traefik --configFile=/tmp/traefik.yml
+    labels:
+      # Traefik itself exposes nothing (dashboard disabled in traefik.yml).
+      - "traefik.enable=false"
+
+  # ===========================================================================
+  # biject-proxy — the enforcement hop. THE ONLY SERVICE ON BOTH kernel AND
+  # edc. Verifies with biject-api first; forwards to OpenClinica only on an
+  # `allowed` verdict; any timeout/error/unknown verdict is a denial.
+  # No depends_on for biject-api — the proxy is fail-closed: with the verifier
+  # unreachable it comes up and denies every call, which is the specified
+  # behaviour (same rationale as the platform compose).
+  # ===========================================================================
+  biject-proxy:
+    # !! PLACEHOLDER — pin to the full 40-char git SHA the biject-proxy repo's
+    # CI published; keep BIJECT_IMAGE_SHA below identical (pin-images.sh
+    # convention; see file header).
+    image: ghcr.io/bijectai/biject-proxy:PIN_ME_40CHAR_GIT_SHA
+    restart: unless-stopped
+    networks:
+      edge:
+        ipv4_address: 172.29.99.10
+      kernel:
+        ipv4_address: 172.29.98.10
+      edc:
+        # Pinned: the firewall allows exactly this address into the EDC.
+        ipv4_address: 172.29.100.10
+    environment:
+      - BIJECT_API_URL=http://biject-api:8000
+      # Empty by default: the proxy should not come up able to reach anything
+      # until someone decides what it may reach. Every generic forward is
+      # refused with `unknown_target` until this is set (name=url,name=url).
+      - PROXY_TARGETS=${PROXY_TARGETS:-}
+      - VERIFY_TIMEOUT_MS=${VERIFY_TIMEOUT_MS:-2000}
+      - FORWARD_TIMEOUT_MS=${FORWARD_TIMEOUT_MS:-10000}
+      - AUDIT_SKEW_MS=${AUDIT_SKEW_MS:-5000}
+      # Advisory verdict emission to biject-trace (wall feed). Never gates or
+      # delays a decision.
+      - BIJECT_TRACE_URL=http://biject-trace:8010
+      # Shared ingest token for the wall feed (biject-trace's POST
+      # /v1/verdicts checks the same value; unset = open ingest, announced by
+      # trace — a forger could then paint the wall, never the ledger).
+      - TRACE_INGEST_TOKEN=${TRACE_INGEST_TOKEN:-}
+      # Inbound API key (X-Biject-Proxy-Key header, constant-time compared).
+      # Required on every route except the health probes; the SAME value goes
+      # to the agent host as BIJECT_PROXY_API_KEY. Left unset, every gated
+      # route refuses with `auth_not_configured` — a deliberate deployment
+      # blocker, same design as the empty PROXY_TARGETS.
+      - PROXY_API_KEY=${PROXY_API_KEY:-}
+      # OpenClinica adapter (base URL as seen from inside the edc network;
+      # unset disables both EDC routes — so this line is load-bearing).
+      - OPENCLINICA_URL=http://openclinica:8080
+      - OPENCLINICA_USERNAME=${OPENCLINICA_USERNAME:?set in .env}
+      - OPENCLINICA_PASSWORD=${OPENCLINICA_PASSWORD:?set in .env}
+      # OC3 WS-Security wants the SHA-1 HEX OF THE PASSWORD here, not the
+      # password itself — a different value from the session one above.
+      - OPENCLINICA_WS_PASSWORD=${OPENCLINICA_WS_PASSWORD:?set in .env (SHA-1 hex of the OC password)}
+      - OPENCLINICA_METADATA_VERSION_OID=${OPENCLINICA_METADATA_VERSION_OID:-v1.0.0}
+      # Reported on /healthz — keep identical to the image tag above.
+      - BIJECT_IMAGE_SHA=PIN_ME_40CHAR_GIT_SHA
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=biject-edge"
+      - "traefik.http.routers.biject-proxy.rule=Host(`proxy.${DEMO_DOMAIN}`)"
+      - "traefik.http.routers.biject-proxy.entrypoints=websecure"
+      - "traefik.http.routers.biject-proxy.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.biject-proxy.middlewares=security-headers@file"
+      - "traefik.http.services.biject-proxy.loadbalancer.server.port=8080"
+
+  # ===========================================================================
+  # biject-api — the verification core (FastAPI + Lean kernel pool + signed
+  # audit ledger). kernel network ONLY: it is reachable by the proxy and
+  # observable by trace, and nothing internet-facing routes to it.
+  # ===========================================================================
+  biject-api:
+    # !! PLACEHOLDER — full 40-char git SHA (pin-images.sh convention).
+    image: ghcr.io/bijectai/biject-api:PIN_ME_40CHAR_GIT_SHA
+    restart: unless-stopped
+    networks:
+      - kernel
+    environment:
+      # Ed25519 seed (base64, 32 bytes) for the audit ledger. biject-api
+      # raises at import time when unset — no ephemeral-key fallback, by
+      # design. Generation recipe + rotation caveat:
+      # .claude/handoff/track2-human-gated.md item 1.
+      - AUDIT_SIGNING_KEY=${AUDIT_SIGNING_KEY:?AUDIT_SIGNING_KEY must be set - biject-api will not start without it (see .env.example)}
+      # Public half of the agent host's AGENT_SIGNING_KEY, for sigOk
+      # verification. The agent's PRIVATE seed never lands on this host.
+      - AGENT_VERIFY_PUBKEY=${AGENT_VERIFY_PUBKEY:-}
+      # Optional integrations — empty disables the feature at the feature, it
+      # never weakens a verdict (same reasoning as the platform compose).
+      - ORACLE_SIGNING_KEY=${ORACLE_SIGNING_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ARISTOTLE_API_KEY=${ARISTOTLE_API_KEY:-}
+      - LEAN_WORKER_URL=inproc://lean-pool
+      - POLICY_ENV_DIR=/app/PolicyEnv
+      - AUDIT_LOG_PATH=/app/policy_data/audit.log
+      - REDIS_URL=redis://redis:6379
+      - BIJECT_IMAGE_SHA=PIN_ME_40CHAR_GIT_SHA
+    volumes:
+      - policy_data:/app/policy_data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ===========================================================================
+  # redis — kernel-network cache for biject-api. No host ports.
+  # ===========================================================================
+  redis:
+    # Third-party digest pin carried over verbatim from the platform compose
+    # (this one is REAL, not a placeholder).
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    restart: unless-stopped
+    networks:
+      - kernel
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ===========================================================================
+  # biject-trace — read-only ledger lens + wall feed. kernel (ledger volume
+  # :ro, proxy verdict emissions) + edge (the wall queries it). The ledger
+  # volume is mounted READ-ONLY: every append goes through biject-api's
+  # single lock-guarded path, and :ro enforces at the kernel of the OS what
+  # trace promises in code. Holds only the PUBLIC verify key.
+  # ===========================================================================
+  biject-trace:
+    # !! PLACEHOLDER — full 40-char git SHA (pin-images.sh convention).
+    image: ghcr.io/bijectai/biject-trace:PIN_ME_40CHAR_GIT_SHA
+    restart: unless-stopped
+    networks:
+      - kernel
+      - edge
+    environment:
+      - AUDIT_LOG_PATH=/app/policy_data/audit.log
+      # Public half of AUDIT_SIGNING_KEY. Unset -> hash linkage is checked but
+      # signatures are not, and every response says so (degraded and
+      # announced, never silently downgraded).
+      - AUDIT_VERIFY_PUBKEY=${AUDIT_VERIFY_PUBKEY:-}
+      # Shared with biject-proxy for wall-feed ingest (POST /v1/verdicts).
+      # Unset = open ingest — set it; the wall should not be paintable by
+      # whoever can reach the edge network.
+      - TRACE_INGEST_TOKEN=${TRACE_INGEST_TOKEN:-}
+      - BIJECT_IMAGE_SHA=PIN_ME_40CHAR_GIT_SHA
+    volumes:
+      - policy_data:/app/policy_data:ro
+
+  # ===========================================================================
+  # wall — the live demo wall served at wall.<domain>. Built from the repo's
+  # wall/ directory (../../../../wall relative to this file): the real D8
+  # dashboard — SSE feed from biject-trace, separate latency_us/elab_us
+  # columns, REFUTED clause display. Its nginx proxies /trace/ to
+  # biject-trace over the edge network; it is on no decision path.
+  # ===========================================================================
+  wall:
+    build:
+      context: ../../../../wall
+    image: biject/wall:dev
+    restart: unless-stopped
+    networks:
+      - edge
+    environment:
+      - BIJECT_TRACE_URL=http://biject-trace:8010
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=biject-edge"
+      - "traefik.http.routers.wall.rule=Host(`wall.${DEMO_DOMAIN}`)"
+      - "traefik.http.routers.wall.entrypoints=websecure"
+      - "traefik.http.routers.wall.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.wall.middlewares=security-headers@file"
+      - "traefik.http.services.wall.loadbalancer.server.port=80"
+
+  # ===========================================================================
+  # oc-db — Postgres 9.5 (the newest version OC 3.x is validated against; do
+  # not "helpfully" upgrade it, OC 3.17's schema migrations break on 10+).
+  # edc network ONLY. NO `ports:` — ever. Reachable only as oc-db:5432 from
+  # inside biject-edc.
+  # ===========================================================================
+  oc-db:
+    # Third-party pin convention applies here too: resolve and append the
+    # digest at deploy time (`docker buildx imagetools inspect postgres:9.5`).
+    image: postgres:9.5@sha256:PIN_ME_POSTGRES_DIGEST
+    restart: unless-stopped
+    networks:
+      edc:
+        # Pinned to match ../../firewall/ defaults.
+        ipv4_address: 172.29.100.40
+    environment:
+      # Superuser password for the container (init only; the app never uses it).
+      - POSTGRES_PASSWORD=${OC_DB_SUPERUSER_PASSWORD:?set in .env}
+      # Consumed by init-db.sh (runs once on first boot with an empty volume).
+      - OC_DB_USER=${OC_DB_USER:-clinica}
+      - OC_DB_PASSWORD=${OC_DB_PASSWORD:?set in .env}
+      - OC_DB_NAME=${OC_DB_NAME:-openclinica}
+    volumes:
+      - oc_pgdata:/var/lib/postgresql/data
+      # First-boot init (creates role + db), reused from the Hetzner tree —
+      # the AWS runbook rsyncs the whole infra/ directory so this relative
+      # path resolves on the host. Runs only when the data volume is EMPTY.
+      - ../../../hetzner/openclinica/init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${OC_DB_NAME:-openclinica} || pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ===========================================================================
+  # openclinica — OC 3.17 CE: one Tomcat serving BOTH WARs
+  #   /OpenClinica      — the web UI     (routed: oc.<domain>, presenter only)
+  #   /OpenClinica-ws   — SOAP services  (NEVER routed; proxy-only, via edc)
+  # Built from the Hetzner build context (Dockerfile + entrypoint unchanged;
+  # the two WARs must sit in infra/hetzner/openclinica/dist/ on the host —
+  # APPLY-PLAN step 5). edc network ONLY. No host ports.
+  # ===========================================================================
+  openclinica:
+    build:
+      context: ../../../hetzner/openclinica
+      dockerfile: Dockerfile
+    image: biject/openclinica:3.17-ce
+    restart: unless-stopped
+    networks:
+      edc:
+        # Pinned to match ../../firewall/ defaults.
+        ipv4_address: 172.29.100.30
+    depends_on:
+      oc-db:
+        condition: service_healthy
+    environment:
+      # Rendered into datainfo.properties by docker-entrypoint.sh at start.
+      - OC_DB_HOST=oc-db
+      - OC_DB_PORT=5432
+      - OC_DB_USER=${OC_DB_USER:-clinica}
+      - OC_DB_PASSWORD=${OC_DB_PASSWORD:?set in .env}
+      - OC_DB_NAME=${OC_DB_NAME:-openclinica}
+      - DEMO_DOMAIN=${DEMO_DOMAIN:?set in .env}
+      - OC_ADMIN_EMAIL=${OC_ADMIN_EMAIL:-ops@example.com}
+      - OC_MAIL_HOST=${OC_MAIL_HOST:-localhost}
+      # m6i.2xlarge has 32 GiB — heap can breathe compared to the Hetzner box,
+      # but OC 3.17 gains little past a few GB; bump deliberately if needed.
+      - JAVA_OPTS=-Xms512m -Xmx2048m -XX:+UseG1GC -Djava.awt.headless=true
+    volumes:
+      # OC data directory (filePath in datainfo.properties) — shared by the
+      # UI and ws apps, persisted across redeploys.
+      - oc_data:/usr/local/tomcat/openclinica.data
+    # -------------------------------------------------------------------------
+    # Traefik routing — UI ONLY, presenter's IP ONLY.
+    #   * Host(`oc.<domain>`) matches every path on that hostname (including
+    #     `/`), so the ipAllowList denies the whole surface to everyone but
+    #     the presenter — this is what makes verify_lockdown_aws.sh's
+    #     "curl https://oc.<domain>/ from the agent -> 403" probe meaningful.
+    #   * The SOAP path is carved OUT with v3 negation: plain Host() would
+    #     also route /OpenClinica-ws, silently exposing the write API to the
+    #     (presenter's) internet. The SOAP surface stays proxy-only, via edc.
+    #   * Optional second factor: uncomment the basicauth lines to ALSO
+    #     require credentials in front of OC's own login (htpasswd via
+    #     OC_UI_BASICAUTH_USERS in .env, `$` escaped as `$$`).
+    # -------------------------------------------------------------------------
+    labels:
+      - "traefik.enable=true"
+      # Traefik must dial us over the internal network, not its default edge.
+      - "traefik.docker.network=biject-edc"
+      - "traefik.http.routers.oc-ui.rule=Host(`oc.${DEMO_DOMAIN}`) && !PathPrefix(`/OpenClinica-ws`)"
+      - "traefik.http.routers.oc-ui.entrypoints=websecure"
+      - "traefik.http.routers.oc-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.oc-ui.middlewares=oc-presenter-only@docker,security-headers@file"
+      # THE presenter allowlist: exactly one /32. Everyone else gets 403.
+      - "traefik.http.middlewares.oc-presenter-only.ipallowlist.sourcerange=${PRESENTER_IP:?set PRESENTER_IP in .env}/32"
+      # - "traefik.http.routers.oc-ui.middlewares=oc-presenter-only@docker,oc-ui-auth@docker,security-headers@file"
+      # - "traefik.http.middlewares.oc-ui-auth.basicauth.users=${OC_UI_BASICAUTH_USERS}"
+      - "traefik.http.services.oc-ui.loadbalancer.server.port=8080"
