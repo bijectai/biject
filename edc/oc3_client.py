@@ -88,7 +88,9 @@ Write path details
 
 The ODM is embedded (as XML, not as an escaped string) inside a
 ``<v1:importRequest>`` SOAP body and POSTed with ``Content-Type: text/xml``
-and an empty ``SOAPAction`` to ``{ws_base}/ws/dataImport/v1``. The response's
+and an empty ``SOAPAction`` to ``{ws_base}/ws/data/v1`` (the Spring-WS data
+service; endpoint selection is by payload root, and no dataImport service
+exists in the 3.17.2 source). The response's
 ``<result>`` element is checked for ``Success``; anything else raises
 :class:`OC3WriteError` carrying the server's ``<error>`` text(s).
 
@@ -613,7 +615,11 @@ class OC3Client:
 
     def _post_import(self, envelope: bytes) -> str:
         """POST the SOAP envelope; parse Success/error out of the response."""
-        url = f"{self.ws_base_url}/ws/dataImport/v1"
+        # /ws/data/v1 is the canonical import endpoint (OC 3.17.2 source:
+        # ws-servlet-config.xml locationUri=/ws/data/v1; there is no
+        # dataImport service — the old name only worked because Spring-WS
+        # routes any /ws/* POST by payload root).
+        url = f"{self.ws_base_url}/ws/data/v1"
         headers = {
             "Content-Type": "text/xml; charset=UTF-8",
             # OC-ws routes on the body element, not SOAPAction, but the header
