@@ -92,6 +92,20 @@ services:
       # `unknown_target` until this is set.
       PROXY_TARGETS: ${PROXY_TARGETS:-}
       VERIFY_TIMEOUT_MS: ${VERIFY_TIMEOUT_MS:-2000}
+      # The live verdict feed (biject-trace's POST /v1/verdicts). Advisory:
+      # unset makes emission a no-op and can never affect a verdict — but the
+      # wall shows nothing without it, so the default points at the trace
+      # service this file already runs.
+      BIJECT_TRACE_URL: ${BIJECT_TRACE_URL:-http://biject-trace:8010}
+      # Optional shared ingest token, sent as X-Trace-Ingest-Token; set the
+      # same value on biject-trace. `:-` not `:?`: it hardens an advisory
+      # feed on an internal network, it is not a boot requirement.
+      TRACE_INGEST_TOKEN: ${TRACE_INGEST_TOKEN:-}
+      # Caller-facing API key. Empty means every gated route refuses
+      # (`auth_not_configured`) — the same deliberate deployment blocker as
+      # the empty target allowlist, so `:-` keeps the container bootable
+      # while the refusal surfaces at the feature.
+      PROXY_API_KEY: ${PROXY_API_KEY:-}
       # Reported on /healthz so an operator can confirm what is actually running
       # matches what this file pins.
       BIJECT_IMAGE_SHA: 68b73a0478ec7edf270e6eb5ae4402dc09459ff4
@@ -114,6 +128,10 @@ services:
       # is why `:-` is right here and `:?` would only stop the read-only lens
       # from starting.
       AUDIT_VERIFY_PUBKEY: ${AUDIT_VERIFY_PUBKEY:-}
+      # Optional shared token gating POST /v1/verdicts (the proxy sends it as
+      # X-Trace-Ingest-Token). Unset → open ingest, acceptable only on an
+      # internal network; a holder can paint the wall, never alter the ledger.
+      TRACE_INGEST_TOKEN: ${TRACE_INGEST_TOKEN:-}
       BIJECT_IMAGE_SHA: 8c415d1418d8c32aeb33b29c5b97b1af9d5ca434
     volumes:
       - policy_data:/app/policy_data:ro
