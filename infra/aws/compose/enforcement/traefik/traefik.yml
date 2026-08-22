@@ -1,0 +1,107 @@
+# =============================================================================
+# Traefik v3 STATIC configuration (template) — AWS enforcement host.
+# Adapted from infra/hetzner/traefik/traefik.yml (S4-D-10); the rendering
+# mechanism is identical: this file is mounted read-only as
+# /etc/traefik/traefik.template.yml and rendered at container start by the
+# entrypoint in ../docker-compose.yml:
+#
+#     sed "s|__ACME_EMAIL__|$ACME_EMAIL|g" template > /tmp/traefik.yml
+#
+# Why a template: Traefik does NOT merge static configuration across sources
+# (file vs CLI vs env) — whichever single source it finds wins — so the ACME
+# email cannot be injected as an env var next to this file. The placeholder is
+# substituted from .env (ACME_EMAIL) at startup. Everything else here is
+# non-secret and safe to commit.
+#
+# AWS-port deltas from the Hetzner original, all deliberate:
+#   * docker provider default network is `biject-edge` (same fixed name, new
+#     ipam pins — see ../docker-compose.yml).
+#   * Host-based routing across three subdomains (proxy./wall./oc.<domain>)
+#     instead of path prefixes on one host; routers live as docker labels in
+#     ../docker-compose.yml.
+#   * A commented DNS-01/Namecheap resolver block for the strictest SG posture
+#     (no inbound :80 at all) — see enable_acme_http01 in
+#     ../../../terraform/variables.tf.
+# =============================================================================
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# Dashboard/API disabled — internet-facing demo box. Never `insecure: true`.
+api:
+  dashboard: false
+  insecure: false
+
+log:
+  level: INFO
+
+# Access log to stdout -> `docker logs traefik`.
+accessLog: {}
+
+entryPoints:
+  # :80 exists only for the ACME HTTP-01 challenge (Traefik answers it
+  # internally before the redirect applies) and to bounce humans to HTTPS.
+  # The SG only opens :80 while enable_acme_http01=true.
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    # Nothing is routed unless it opts in with `traefik.enable=true`. This is
+    # what keeps random containers (and the OC SOAP endpoint) from being
+    # accidentally exposed.
+    exposedByDefault: false
+    # Default network Traefik uses to reach discovered containers. The OC UI
+    # router overrides this per-container with `traefik.docker.network=
+    # biject-edc` (Traefik's documented-exception attachment to the EDC
+    # network — see ../docker-compose.yml).
+    network: biject-edge
+
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  # HTTP-01 challenge: requires the three A records (proxy./wall./oc.<domain>,
+  # Namecheap) to already point at the enforcement EIP, and inbound :80 open
+  # (terraform enable_acme_http01=true, the default).
+  letsencrypt:
+    acme:
+      # Rendered from ACME_EMAIL in .env at container start — see header.
+      email: "__ACME_EMAIL__"
+      # Persisted in the biject-traefik-acme named volume; losing it means
+      # re-issuing every cert and burning LE rate limits.
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+      # While iterating on DNS/compose, uncomment the staging CA to avoid the
+      # production rate limit (5 duplicate certs/week), then remove it AND
+      # wipe the acme volume to switch back to production certs:
+      # caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+
+  # ---------------------------------------------------------------------------
+  # STRICT-SG ALTERNATIVE (not active): DNS-01 via Namecheap needs no inbound
+  # :80 at all. To switch: (1) uncomment this resolver, (2) point every
+  # router's `tls.certresolver` label at `letsencrypt-dns`, (3) add
+  # NAMECHEAP_API_USER / NAMECHEAP_API_KEY to the traefik service environment
+  # (values via .env — they are credentials; never commit them), (4) set
+  # terraform enable_acme_http01=false and re-apply. Note Namecheap's DNS API
+  # itself needs your egress IP allowlisted in the Namecheap account settings.
+  # ---------------------------------------------------------------------------
+  # letsencrypt-dns:
+  #   acme:
+  #     email: "__ACME_EMAIL__"
+  #     storage: /letsencrypt/acme-dns.json
+  #     dnsChallenge:
+  #       provider: namecheap

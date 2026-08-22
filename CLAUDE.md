@@ -149,10 +149,13 @@ text is the operative one for the demo's files.
   enforcement path and their output is never a kernel input or proxy decision.
 - **The enforcement bound holds at the network layer.** OC and its Postgres
   live on an internal Docker network reachable only from the proxy; the agent
-  host has no route to OC except the proxy (`infra/hetzner/firewall/`,
-  verified by `verify_lockdown.sh` — tested, not assumed). This is why the
-  agent uses SDK **function tools over plain HTTP, not MCP** — MCP is the
-  post-sprint upgrade.
+  host has no route to OC except the proxy (`infra/hetzner/firewall/` for the
+  Hetzner layout, `infra/aws/firewall/` + security groups for the AWS port,
+  each with its own `verify_lockdown` acceptance test — tested, not assumed).
+  The demo agent uses SDK **function tools over plain HTTP**
+  (`adapters/openai/`); an MCP shim over the same proxy surface now exists
+  too (`adapters/mcp/`, biject-oc-mcp) for MCP clients. Either way, toolset
+  shape is ergonomics — the network layer is the enforcement.
 - **Two trusted inputs, both named:** `sigOk` (Ed25519 verdict from the
   signing pipeline — since S4-D-30, verified over the signed digest
   recomputed from the ledger-stored canonical params, so proven bytes =
@@ -209,14 +212,44 @@ end; Bedrock and Foundry adapters written, not yet run."
   superseded by the S4-A-12 freeze (Adeel). The platform convention is that
   contracts live in `bijectai/biject-contracts` and are vendored — reconcile
   at freeze time.
-- `edc/` — OC3 integration: `oc3_client.py` (session ODM read with
-  `includeDNs=y&includeAudits=y`; SOAP `importData` write with `UpsertOn` +
-  `TransactionType="Update"`), `study_def.xml` / `seed_data.xml` (synthetic
-  study BJT-DEMO-01 with deliberately messy, *self-resolvable* data),
-  `seed.py` (data import + `--verify` open-query count).
-- `adapters/openai/` — Agents SDK function tools POSTing to the proxy.
-  `adapters/` is **outside the core dependency graph**; core code never
-  imports from it.
+- `edc/` — OC3 integration: `oc3_client.py` (session ODM read at
+  `/OpenClinica/rest/clinicaldata/xml/view/...` with
+  `includeDNs=y&includeAudits=y`; SOAP `importData` write to `/ws/data/v1`
+  with `UpsertOn` + `TransactionType="Update"` — both paths pinned against
+  the 3.17.2 source, live confirmation pending S4-D-12), `study_def.xml`
+  (3 events, 3 CRFs, NO soft edit checks — soft checks fail the whole ws
+  import), `rules.xml` (the query mechanism: `DiscrepancyNoteAction` rules
+  with `Run ImportDataEntry="true"`, XSD-validated), `seed_data.xml`
+  (14 subjects; 12 resolvable planted queries + **4 deliberately
+  unresolvable** — abstention is part of pass 1), `query_resolution_map.md`
+  (source of truth per query), `seed.py` (per-subject-per-event import +
+  `--verify`), `reset_demo.sh` (pg_dump snapshot/restore; re-import cannot
+  reset because RuleActionRunLog dedups), `README.md` (the manual UI
+  sequence).
+- `adapters/openai/` — Agents SDK function tools calling the proxy's
+  per-operation routes (`/queries/open`, `/items/context`, `/items/write`)
+  with `X-Biject-Proxy-Key` + `X-Biject-Agent-Id`; the write flow reads the
+  item context, has `agent/audit_entry.py` sign over the observed old value,
+  then POSTs the flat six-field body. `adapters/mcp/` — the biject-oc-mcp
+  MCP shim exposing the same three tools to any MCP client. `adapters/` is
+  **outside the core dependency graph**; core code never imports from it.
+- `agent/` — the S4-A-30 signing pipeline (`audit_entry.py`: pipe-preimage
+  `actorId|action|itemOid|oldValueHash|newValueHash|reasonCode|tsUnixMs`,
+  integer action enum, Ed25519 over the digest's ASCII hex, key from
+  `AGENT_SIGNING_KEY`, identity from `ACTOR_ID`; validated against the
+  golden fixture) and `run_demo.py` (minimal Agents SDK runner;
+  `--verify-toolset` is the toolset-restriction check).
+- `wall/` — the verdict wall (self-contained `wall.html` + nginx image):
+  SSE from biject-trace's `/v1/verdicts/stream`, separate `elab_us` /
+  `latency_us` / proxy-total columns, REFUTED rows show the failed clause
+  from `lean_trace`. §2.4 copy rules apply to every string in it.
+- `demo/` — the prompt library (`prompts.md`, Workstream H; run log pending
+  a live stack) and the demo runbook notes (`README.md`).
+- `infra/aws/` — the AWS port (Terraform for the two-EC2 topology, the
+  enforcement/agent compose files with `edge`/`kernel`/`edc` networks,
+  firewall + `verify_lockdown_aws.sh`, `APPLY-PLAN.md`). Prepared by Fable;
+  a human applies. `infra/hetzner/` remains the original skeleton and the
+  home of the OpenClinica image build the AWS compose reuses.
 - `infra/hetzner/` — compose skeleton (Traefik TLS via `DEMO_DOMAIN`,
   networks `edge` + internal `edc_internal`), `openclinica/` (OC 3.17 CE +
   Postgres 9.5 + **OpenClinica-ws SOAP WAR** — the ws WAR is a separate

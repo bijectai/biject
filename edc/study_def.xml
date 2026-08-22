@@ -1,32 +1,76 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  study_def.xml (S4-D-20) - ODM 1.3 study metadata for the synthetic Phase II
-  demo study "BJT-DEMO-01" (StudyOID S_BJTDEMO). 100% SYNTHETIC - no real
-  study, site, subject, or PHI data anywhere in this file.
+  study_def.xml - ODM 1.3 study metadata for the synthetic Phase II demo
+  study "BJT-DEMO-01" (StudyOID S_BJTDEMO). 100% SYNTHETIC - no real study,
+  site, subject, or PHI data anywhere in this file.
 
-  IMPORT NOTE (see seed.py): in OpenClinica 3.17 this file is uploaded
-  MANUALLY via the OC UI (Tasks -> Build Study -> Create CRF / import study
-  metadata); metadata import over the SOAP study WS is unreliable in 3.17,
-  so seed.py deliberately handles clinical DATA import only.
+  ROLE OF THIS FILE: documentation of record for the study structure. OC 3.17
+  cannot import ODM study metadata; the study is built MANUALLY in the OC UI
+  from Excel CRF templates (see edc/README.md for the exact click path and the
+  exact names that make OC auto-generate the OIDs below). This file is the
+  single source of truth that seed_data.xml, rules.xml and
+  query_resolution_map.md are written against.
 
-  Structure: one site, one scheduled event (SE_VISIT1), two CRFs:
-    F_VITALS (IG_VITALS): SBP, DBP, HR, weight kg, height cm, BMI, nurse note
-    F_LABS   (IG_LABS):   hemoglobin, WBC, creatinine, collection date,
-                          lab source-transcription note
-  RangeChecks are declared on the numeric items so OC edit checks CAN fire
-  discrepancy notes on out-of-range values (e.g. SBP 80-200). SoftHard="Soft"
-  so an out-of-range import is accepted but flagged - exactly what the demo
-  needs (data lands, query raised).
+  STRUCTURE: three non-repeating scheduled events, three CRFs:
+    SE_SCREENING : F_DEMOG  (demographics + screening date + enrollment note)
+                   F_VITALS (baseline vitals)
+    SE_VISIT1    : F_VITALS, F_LABS
+    SE_VISIT2    : F_VITALS, F_LABS   (repeat lab draw - the source of truth
+                                       for the out-of-range-lab query class)
 
-  All OIDs here are the single source of truth; seed_data.xml and the CLI
-  examples in oc3_client.py use these exact OIDs.
+  NO SOFT EDIT CHECKS - DELIBERATE (source-verified against OC 3.17.2):
+  In the OpenClinica-ws SOAP import path, DataImportService.validateData
+  (ws/.../DataImportService.java:187-193) treats SOFT validation errors
+  (CRF VALIDATION column / ODM RangeCheck) the same as hard errors: any soft
+  violation makes the ENTIRE importData call return <result>Fail</result> and
+  nothing is written. The previous revision of this file carried Soft
+  RangeChecks on every numeric item; those would have rejected the messy seed
+  data outright. Queries therefore come from the RULES ENGINE instead:
+  rules.xml carries DiscrepancyNoteAction rules with Run ImportDataEntry=
+  "true", which DO fire during SOAP import and auto-create open
+  Failed Validation Check discrepancy notes (docs "Data Web Service" +
+  "Import Data" pages; source chain DataEndpoint -> runRulesSetup ->
+  ImportDataRuleRunner -> DiscrepancyNoteActionProcessor).
+  => When building the CRF Excel templates, leave the VALIDATION and
+     WIDTH_DECIMAL columns EMPTY (width/decimal violations are HARD errors on
+     import and would also reject seeded values such as weight "703").
+
+  OID DERIVATION (matches OC 3.17.2 bean/oid/*OidGenerator.java exactly;
+  README.md gives the UI names that produce them):
+    Study     "S_" + first 8 alnum chars of Unique Protocol ID
+              -> Unique Protocol ID "BJT-DEMO"        => S_BJTDEMO
+    Event     "SE_" + first 28 alnum chars of event name
+              -> "Screening"/"Visit 1"/"Visit 2"      => SE_SCREENING,
+                                                         SE_VISIT1, SE_VISIT2
+    CRF       "F_" + first 12 alnum chars of CRF name
+              -> "DEMOG"/"VITALS"/"LABS"              => F_DEMOG, F_VITALS,
+                                                         F_LABS
+    CRF ver   CRF OID + "_" + first 10 alnum chars of version name
+              -> version "v1.0"                       => F_DEMOG_V10,
+                                                         F_VITALS_V10,
+                                                         F_LABS_V10
+              (ClinicalData/FormData@FormOID in seed_data.xml MUST use these
+               version OIDs - the ws import resolves FormOID against
+               crf_version.oc_oid, not the CRF-level OID)
+    Group     "IG_" + first 5 of CRF name + "_UNGROUPED" for items left
+              ungrouped in the Excel                  => IG_DEMOG_UNGROUPED,
+                                                         IG_VITAL_UNGROUPED,
+                                                         IG_LABS_UNGROUPED
+    Item      "I_" + first 5 alnum chars of CRF name + "_" + item name
+              (note: "VITALS" truncates to "VITAL")   => I_DEMOG_*, I_VITAL_*,
+                                                         I_LABS_*
+    Subject   "SS_" + first 8 alnum chars of Study Subject ID
+              -> IDs "001".."014"                     => SS_001..SS_014
+
+  The FormDef OIDs below are the CRF-level OIDs (F_DEMOG / F_VITALS / F_LABS);
+  the per-version OIDs used on the wire are listed beside each FormDef.
 -->
 <ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"
      xmlns:OpenClinica="http://www.openclinica.org/ns/odm_ext_v130/v3.1"
      FileType="Snapshot"
      FileOID="BJT-DEMO-01-METADATA"
      Description="BJT-DEMO-01 synthetic Phase II demo study metadata"
-     CreationDateTime="2026-08-13T00:00:00"
+     CreationDateTime="2026-08-21T00:00:00"
      ODMVersion="1.3">
   <Study OID="S_BJTDEMO">
     <GlobalVariables>
@@ -40,164 +84,135 @@
     <BasicDefinitions/>
     <MetaDataVersion OID="v1.0.0" Name="BJT-DEMO-01 v1.0.0">
       <Protocol>
-        <StudyEventRef StudyEventOID="SE_VISIT1" OrderNumber="1" Mandatory="Yes"/>
+        <StudyEventRef StudyEventOID="SE_SCREENING" OrderNumber="1" Mandatory="Yes"/>
+        <StudyEventRef StudyEventOID="SE_VISIT1" OrderNumber="2" Mandatory="Yes"/>
+        <StudyEventRef StudyEventOID="SE_VISIT2" OrderNumber="3" Mandatory="Yes"/>
       </Protocol>
 
-      <!-- One scheduled visit carrying both CRFs. -->
+      <StudyEventDef OID="SE_SCREENING" Name="Screening" Repeating="No" Type="Scheduled">
+        <FormRef FormOID="F_DEMOG" Mandatory="Yes"/>
+        <FormRef FormOID="F_VITALS" Mandatory="Yes"/>
+      </StudyEventDef>
       <StudyEventDef OID="SE_VISIT1" Name="Visit 1" Repeating="No" Type="Scheduled">
         <FormRef FormOID="F_VITALS" Mandatory="Yes"/>
         <FormRef FormOID="F_LABS" Mandatory="Yes"/>
       </StudyEventDef>
+      <StudyEventDef OID="SE_VISIT2" Name="Visit 2" Repeating="No" Type="Scheduled">
+        <FormRef FormOID="F_VITALS" Mandatory="Yes"/>
+        <FormRef FormOID="F_LABS" Mandatory="Yes"/>
+      </StudyEventDef>
 
-      <FormDef OID="F_VITALS" Name="Vitals" Repeating="No">
-        <ItemGroupRef ItemGroupOID="IG_VITALS" Mandatory="Yes"/>
+      <!-- CRF "DEMOG" v1.0 -> version OID F_DEMOG_V10 (used in FormData) -->
+      <FormDef OID="F_DEMOG" Name="Demographics" Repeating="No">
+        <ItemGroupRef ItemGroupOID="IG_DEMOG_UNGROUPED" Mandatory="Yes"/>
       </FormDef>
-      <FormDef OID="F_LABS" Name="Labs" Repeating="No">
-        <ItemGroupRef ItemGroupOID="IG_LABS" Mandatory="Yes"/>
+      <!-- CRF "VITALS" v1.0 -> version OID F_VITALS_V10 (used in FormData) -->
+      <FormDef OID="F_VITALS" Name="Vital Signs" Repeating="No">
+        <ItemGroupRef ItemGroupOID="IG_VITAL_UNGROUPED" Mandatory="Yes"/>
+      </FormDef>
+      <!-- CRF "LABS" v1.0 -> version OID F_LABS_V10 (used in FormData) -->
+      <FormDef OID="F_LABS" Name="Laboratory" Repeating="No">
+        <ItemGroupRef ItemGroupOID="IG_LABS_UNGROUPED" Mandatory="Yes"/>
       </FormDef>
 
-      <ItemGroupDef OID="IG_VITALS" Name="Vitals Measurements" Repeating="No"
-                    SASDatasetName="VITALS">
-        <ItemRef ItemOID="I_VITALS_SBP" OrderNumber="1" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_VITALS_DBP" OrderNumber="2" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_VITALS_HR" OrderNumber="3" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_VITALS_WEIGHT" OrderNumber="4" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_VITALS_HEIGHT" OrderNumber="5" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_VITALS_BMI" OrderNumber="6" Mandatory="No"/>
-        <ItemRef ItemOID="I_VITALS_NOTE" OrderNumber="7" Mandatory="No"/>
+      <ItemGroupDef OID="IG_DEMOG_UNGROUPED" Name="Demographics (ungrouped)"
+                    Repeating="No" SASDatasetName="DEMOG">
+        <ItemRef ItemOID="I_DEMOG_SCREENDATE" OrderNumber="1" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_DEMOG_AGE" OrderNumber="2" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_DEMOG_SEX" OrderNumber="3" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_DEMOG_ENROLLNOTE" OrderNumber="4" Mandatory="No"/>
       </ItemGroupDef>
-      <ItemGroupDef OID="IG_LABS" Name="Laboratory Results" Repeating="No"
-                    SASDatasetName="LABS">
-        <ItemRef ItemOID="I_LABS_HGB" OrderNumber="1" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_LABS_WBC" OrderNumber="2" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_LABS_CREAT" OrderNumber="3" Mandatory="Yes"/>
-        <ItemRef ItemOID="I_LABS_COLLDATE" OrderNumber="4" Mandatory="Yes"/>
+      <ItemGroupDef OID="IG_VITAL_UNGROUPED" Name="Vital Signs (ungrouped)"
+                    Repeating="No" SASDatasetName="VITALS">
+        <ItemRef ItemOID="I_VITAL_VISITDATE" OrderNumber="1" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_SBP" OrderNumber="2" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_DBP" OrderNumber="3" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_HR" OrderNumber="4" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_WEIGHT" OrderNumber="5" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_HEIGHT" OrderNumber="6" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_VITAL_BMI" OrderNumber="7" Mandatory="No"/>
+        <ItemRef ItemOID="I_VITAL_NOTE" OrderNumber="8" Mandatory="No"/>
+      </ItemGroupDef>
+      <ItemGroupDef OID="IG_LABS_UNGROUPED" Name="Laboratory (ungrouped)"
+                    Repeating="No" SASDatasetName="LABS">
+        <ItemRef ItemOID="I_LABS_COLLDATE" OrderNumber="1" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_HGB" OrderNumber="2" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_WBC" OrderNumber="3" Mandatory="Yes"/>
+        <ItemRef ItemOID="I_LABS_CREAT" OrderNumber="4" Mandatory="Yes"/>
         <ItemRef ItemOID="I_LABS_SOURCE_NOTE" OrderNumber="5" Mandatory="No"/>
       </ItemGroupDef>
 
-      <!-- ============================ Vitals items ======================= -->
-      <ItemDef OID="I_VITALS_SBP" Name="Systolic BP" DataType="integer" Length="3">
-        <Question><TranslatedText xml:lang="en">Systolic blood pressure (mmHg)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>80</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">SBP below plausible range (80-200 mmHg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>200</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">SBP above plausible range (80-200 mmHg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <!-- ====================== Demographics items ======================= -->
+      <!-- Screening/consent date. AUTHORITATIVE anchor for the date-order
+           query class: rules.xml flags any visit date earlier than this. -->
+      <ItemDef OID="I_DEMOG_SCREENDATE" Name="SCREENDATE" DataType="date">
+        <Question><TranslatedText xml:lang="en">Screening / informed consent date</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_VITALS_DBP" Name="Diastolic BP" DataType="integer" Length="3">
-        <Question><TranslatedText xml:lang="en">Diastolic blood pressure (mmHg)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>40</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">DBP below plausible range (40-130 mmHg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>130</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">DBP above plausible range (40-130 mmHg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <ItemDef OID="I_DEMOG_AGE" Name="AGE" DataType="integer">
+        <Question><TranslatedText xml:lang="en">Age at screening (years)</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_VITALS_HR" Name="Heart Rate" DataType="integer" Length="3">
-        <Question><TranslatedText xml:lang="en">Heart rate (beats/min)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>30</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">HR below plausible range (30-200 bpm)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>200</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">HR above plausible range (30-200 bpm)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <!-- Plain text (M/F), not a radio/response set: response-set mismatches
+           are HARD import errors in the ws path; text keeps the planted
+           empty-value import safe. -->
+      <ItemDef OID="I_DEMOG_SEX" Name="SEX" DataType="text">
+        <Question><TranslatedText xml:lang="en">Sex (M/F)</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_VITALS_WEIGHT" Name="Weight" DataType="float"
-               Length="5" SignificantDigits="1">
-        <Question><TranslatedText xml:lang="en">Body weight (kg)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>30</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Adult weight below plausible range (30-250 kg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>250</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Adult weight above plausible range (30-250 kg)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-      </ItemDef>
-      <ItemDef OID="I_VITALS_HEIGHT" Name="Height" DataType="float"
-               Length="5" SignificantDigits="1">
-        <Question><TranslatedText xml:lang="en">Height (cm)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>100</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Adult height below plausible range (100-230 cm)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>230</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Adult height above plausible range (100-230 cm)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-      </ItemDef>
-      <!-- BMI is captured (site-calculated) so cross-field consistency between
-           weight/height/BMI is checkable and a wrong weight is RECOVERABLE:
-           weight_kg = BMI * (height_m)^2. -->
-      <ItemDef OID="I_VITALS_BMI" Name="BMI" DataType="float"
-               Length="4" SignificantDigits="1">
-        <Question><TranslatedText xml:lang="en">Body mass index (kg/m2, site-calculated)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>10</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">BMI below plausible range (10-60)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>60</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">BMI above plausible range (10-60)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-      </ItemDef>
-      <!-- Free-text transcription of the paper source document; this is the
-           "sibling source field" corrections can be derived from. -->
-      <ItemDef OID="I_VITALS_NOTE" Name="Vitals Source Note" DataType="text" Length="255">
-        <Question><TranslatedText xml:lang="en">Source-document transcription note (vitals)</TranslatedText></Question>
+      <!-- Transcription of the paper enrollment log: the recoverable source
+           for the missing-required-field query class on this CRF. -->
+      <ItemDef OID="I_DEMOG_ENROLLNOTE" Name="ENROLLNOTE" DataType="text">
+        <Question><TranslatedText xml:lang="en">Enrollment log transcription (source document)</TranslatedText></Question>
       </ItemDef>
 
-      <!-- ============================= Labs items ======================== -->
-      <ItemDef OID="I_LABS_HGB" Name="Hemoglobin" DataType="float"
-               Length="5" SignificantDigits="1">
-        <Question><TranslatedText xml:lang="en">Hemoglobin (g/dL)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>5</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Hemoglobin below plausible range (5-20 g/dL)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>20</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Hemoglobin above plausible range (5-20 g/dL)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <!-- ======================= Vital Signs items ======================= -->
+      <ItemDef OID="I_VITAL_VISITDATE" Name="VISITDATE" DataType="date">
+        <Question><TranslatedText xml:lang="en">Date of assessment</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_LABS_WBC" Name="WBC" DataType="float"
-               Length="5" SignificantDigits="1">
-        <Question><TranslatedText xml:lang="en">White blood cell count (10^9/L)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>1</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">WBC below plausible range (1-50 x10^9/L)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>50</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">WBC above plausible range (1-50 x10^9/L)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <!-- Plausible ranges are enforced by rules.xml (SBP 80-200 etc.), NOT
+           by RangeChecks here - see the header comment for why. -->
+      <ItemDef OID="I_VITAL_SBP" Name="SBP" DataType="integer">
+        <Question><TranslatedText xml:lang="en">Systolic blood pressure (mmHg)</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_LABS_CREAT" Name="Creatinine" DataType="float"
-               Length="5" SignificantDigits="2">
-        <Question><TranslatedText xml:lang="en">Serum creatinine (mg/dL)</TranslatedText></Question>
-        <RangeCheck Comparator="GE" SoftHard="Soft">
-          <CheckValue>0.2</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Creatinine below plausible range (0.2-10 mg/dL)</TranslatedText></ErrorMessage>
-        </RangeCheck>
-        <RangeCheck Comparator="LE" SoftHard="Soft">
-          <CheckValue>10</CheckValue>
-          <ErrorMessage><TranslatedText xml:lang="en">Creatinine above plausible range (0.2-10 mg/dL)</TranslatedText></ErrorMessage>
-        </RangeCheck>
+      <ItemDef OID="I_VITAL_DBP" Name="DBP" DataType="integer">
+        <Question><TranslatedText xml:lang="en">Diastolic blood pressure (mmHg)</TranslatedText></Question>
       </ItemDef>
-      <ItemDef OID="I_LABS_COLLDATE" Name="Collection Date" DataType="date">
+      <ItemDef OID="I_VITAL_HR" Name="HR" DataType="integer">
+        <Question><TranslatedText xml:lang="en">Heart rate (beats/min)</TranslatedText></Question>
+      </ItemDef>
+      <ItemDef OID="I_VITAL_WEIGHT" Name="WEIGHT" DataType="float">
+        <Question><TranslatedText xml:lang="en">Body weight (kg)</TranslatedText></Question>
+      </ItemDef>
+      <ItemDef OID="I_VITAL_HEIGHT" Name="HEIGHT" DataType="float">
+        <Question><TranslatedText xml:lang="en">Height (cm)</TranslatedText></Question>
+      </ItemDef>
+      <!-- Site-calculated BMI. Together with HEIGHT it makes a wrong WEIGHT
+           RECOVERABLE: weight_kg = BMI * (height_m)^2. rules.xml carries the
+           weight-vs-BMI consistency rule over these three items. -->
+      <ItemDef OID="I_VITAL_BMI" Name="BMI" DataType="float">
+        <Question><TranslatedText xml:lang="en">Body mass index (kg/m2, site-calculated)</TranslatedText></Question>
+      </ItemDef>
+      <!-- Transcription of the paper vitals chart: recoverable source for
+           missing/garbled vitals values. -->
+      <ItemDef OID="I_VITAL_NOTE" Name="NOTE" DataType="text">
+        <Question><TranslatedText xml:lang="en">Vitals chart transcription (source document)</TranslatedText></Question>
+      </ItemDef>
+
+      <!-- ======================== Laboratory items ======================= -->
+      <ItemDef OID="I_LABS_COLLDATE" Name="COLLDATE" DataType="date">
         <Question><TranslatedText xml:lang="en">Sample collection date</TranslatedText></Question>
       </ItemDef>
-      <!-- Free-text transcription of the central-lab report line; this is the
-           "sibling source field" a decimal-shift correction is derived from. -->
-      <ItemDef OID="I_LABS_SOURCE_NOTE" Name="Lab Source Note" DataType="text" Length="255">
-        <Question><TranslatedText xml:lang="en">Source-document transcription note (central lab report)</TranslatedText></Question>
+      <ItemDef OID="I_LABS_HGB" Name="HGB" DataType="float">
+        <Question><TranslatedText xml:lang="en">Hemoglobin (g/dL)</TranslatedText></Question>
+      </ItemDef>
+      <ItemDef OID="I_LABS_WBC" Name="WBC" DataType="float">
+        <Question><TranslatedText xml:lang="en">White blood cell count (10^9/L)</TranslatedText></Question>
+      </ItemDef>
+      <ItemDef OID="I_LABS_CREAT" Name="CREAT" DataType="float">
+        <Question><TranslatedText xml:lang="en">Serum creatinine (mg/dL)</TranslatedText></Question>
+      </ItemDef>
+      <!-- Transcription of the central-lab report line: recoverable source
+           for unit/decimal-shift and missing lab values. -->
+      <ItemDef OID="I_LABS_SOURCE_NOTE" Name="SOURCE_NOTE" DataType="text">
+        <Question><TranslatedText xml:lang="en">Central lab report transcription (source document)</TranslatedText></Question>
       </ItemDef>
     </MetaDataVersion>
   </Study>

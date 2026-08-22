@@ -1,0 +1,62 @@
+# =============================================================================
+# infra/aws/compose/agent — the demo agent runner on EC2 #2 ("biject-agent").
+#
+# ONE service. The agent host runs nothing else, and this file must stay that
+# way: the whole point of the two-instance layout is that the agent's only
+# sanctioned path to the EDC is
+#
+#     https://proxy.<domain>  ->  Traefik  ->  biject-proxy  ->  (verify) -> OC
+#
+# sg-agent (terraform) has no egress rule for 8080/5432, so even a
+# misconfigured container here cannot open a socket to OpenClinica or
+# Postgres. ../../firewall/verify_lockdown_aws.sh, run FROM THIS HOST,
+# confirms that refusal rather than assuming it.
+#
+# !! NO OPENCLINICA VARIABLES ON THIS HOST — EVER !!
+# No OPENCLINICA_URL, no OC credentials, no OC_DB_*. An agent holding EDC
+# credentials could bypass the enforcement hop at the application layer even
+# with the network locked. If a change to this file adds one, the change is
+# wrong.
+#
+# Bring-up:
+#     cd /opt/biject/infra/aws/compose/agent
+#     cp .env.example .env && chmod 600 .env     # then fill in real values
+#     docker compose up -d
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # agent — the demo agent runner (OpenAI Agents SDK function tools POSTing to
+  # the proxy; source under adapters/openai/ in this repo).
+  #
+  # !! PLACEHOLDER IMAGE — no agent-runner image is published yet. When its
+  # repo/CI exists, pin the full 40-char git SHA (scripts/pin-images.sh
+  # convention). Until then, build one from adapters/openai and retag, or run
+  # the adapter directly on the host for the spike.
+  # ===========================================================================
+  agent:
+    image: ghcr.io/bijectai/biject-agent-runner:PIN_ME_40CHAR_GIT_SHA
+    restart: unless-stopped
+    environment:
+      # The ONLY tool-call endpoint the agent knows. Always the public
+      # proxy.<domain> hostname — never a private IP, never an OC address —
+      # so the call carries the agent EIP as source and traverses Traefik's
+      # TLS + the enforcement hop.
+      - BIJECT_PROXY_URL=https://proxy.${DEMO_DOMAIN:?set DEMO_DOMAIN in .env}
+      # Same value as PROXY_API_KEY on the enforcement host; the proxy
+      # requires it (X-Biject-Proxy-Key header) on every non-health route.
+      - BIJECT_PROXY_API_KEY=${BIJECT_PROXY_API_KEY:?set in .env}
+      # Calling-agent identity, sent as X-Biject-Agent-Id. Distinct from
+      # ACTOR_ID (the WHO of a data change, carried in tool-call bodies).
+      - BIJECT_AGENT_ID=${BIJECT_AGENT_ID:?set in .env}
+      - ACTOR_ID=${ACTOR_ID:?set in .env}
+      # Ed25519 seed (base64, 32 bytes) for the S4-A-30 signing pipeline.
+      # Lives ONLY on this host; its PUBLIC half goes to biject-api as
+      # AGENT_VERIFY_PUBKEY (handoff item 1).
+      - AGENT_SIGNING_KEY=${AGENT_SIGNING_KEY:?set in .env}
+      # LLM provider.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?set in .env}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Sprint decision #3: SDK tracing stays OFF — PHI-adjacent payloads must
+      # not leave the host. Hardcoded, not .env-able, on purpose.
+      - OPENAI_AGENTS_DISABLE_TRACING=1

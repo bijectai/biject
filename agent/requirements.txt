@@ -1,0 +1,4 @@
+# S4-A-30 signing pipeline runtime dependency (same floor as scripts/).
+# Ed25519 signing/verification only; keys come from the environment
+# (AGENT_SIGNING_KEY = base64 32-byte seed), never from a tracked file.
+cryptography>=41

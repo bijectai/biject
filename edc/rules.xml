@@ -1,0 +1,363 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  rules.xml - OpenClinica 3.17 Rules for study S_BJTDEMO (BJT-DEMO-01).
+  100% SYNTHETIC demo content; no real study or PHI.
+
+  Upload MANUALLY in the OC UI: Tasks -> Monitor and Manage Data -> Rules ->
+  "Create New Rule(s)" (XML upload). Do this AFTER the study, events and CRF
+  versions exist (the upload validates every Target/Expression OID against the
+  live study) and BEFORE running seed.py. See edc/README.md step 5.
+
+  WHY RULES (and not CRF edit checks): source-verified OC 3.17.2 behavior.
+  Soft edit checks (CRF VALIDATION column / ODM RangeCheck) cause the ENTIRE
+  SOAP importData call to Fail - nothing is written - so they cannot coexist
+  with deliberately messy seed data. Rules with a DiscrepancyNoteAction and
+  Run ImportDataEntry="true" DO run during SOAP import and auto-create open
+  "Failed Validation Check" discrepancy notes on the target item
+  (DataEndpoint -> DataImportService.runRulesSetup -> ImportDataRuleRunner ->
+  DiscrepancyNoteActionProcessor.saveFieldNotes). Every action below therefore
+  carries Run ImportDataEntry="true".
+
+  DEDUP CAVEAT (matters for demo resets): ImportDataRuleRunner consults
+  rule_action_run_log and drops an action that already ran for the same
+  item + value + rule (RuleActionRunLogBean). Re-importing the same seed file
+  cannot re-create the notes - resets must restore the database instead
+  (edc/reset_demo.sh).
+
+  EXPRESSION MECHANICS RELIED ON (all verified in the 3.17.2 source):
+  * Partial expressions (bare item OIDs, e.g. "I_LABS_HGB gt 20") resolve
+    against the values in the CURRENT import first, then the DB - so a rule
+    fires in the same importData call that carries the bad value.
+  * Full-path references to ANOTHER event (the date-order rule's
+    SE_SCREENING....I_DEMOG_SCREENDATE) resolve from the DB only. seed.py
+    therefore imports each subject's Screening event in its own SOAP call
+    BEFORE the visit events, so the screening date is committed by the time
+    the visit-date rule is evaluated.
+  * A relational/arithmetic operator on an empty value raises
+    OpenClinicaSystemException inside the rule runner, which skips that rule
+    for that subject (no note, no import failure). Range rules are thus safe
+    on missing values; the explicit eq "" rules handle emptiness.
+  * "date lt date" compares yyyy-MM-dd dates; a blank date on either side of
+    lt yields a non-"true" sentinel and the action does not fire.
+
+  RULE INVENTORY (10 RuleDefs, 18 assignments):
+    Range      : R_SBP_RANGE, R_WEIGHT_RANGE, R_HGB_RANGE, R_WBC_RANGE,
+                 R_CREAT_RANGE
+    Cross-field: R_WEIGHT_BMI   (weight vs site-calculated BMI + height)
+                 R_VISITDATE_ORDER (visit date before screening/consent date;
+                 screening CRF is the authoritative anchor)
+    Empty-field: R_DBP_MISSING, R_SEX_MISSING, R_HGB_MISSING
+  Schema: core/src/main/resources/properties/rules.xsd (RuleImport = all
+  RuleAssignment elements first, then all RuleDef elements).
+-->
+<RuleImport>
+
+  <!-- ======================= SE_SCREENING assignments ==================== -->
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_SCREENING.F_DEMOG.IG_DEMOG_UNGROUPED.I_DEMOG_SEX</Target>
+    <RuleRef OID="R_SEX_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Sex is required but was left empty. Please complete from the enrollment source documentation.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_SCREENING.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_SBP</Target>
+    <RuleRef OID="R_SBP_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Systolic BP is outside the plausible range 80-200 mmHg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_SCREENING.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_DBP</Target>
+    <RuleRef OID="R_DBP_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Diastolic BP is required but was left empty. Please complete from the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_SCREENING.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_WEIGHT</Target>
+    <RuleRef OID="R_WEIGHT_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is outside the plausible adult range 30-250 kg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+    <RuleRef OID="R_WEIGHT_BMI">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is inconsistent with the recorded height and site-calculated BMI. Please verify which value matches the source.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <!-- ========================= SE_VISIT1 assignments ===================== -->
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_VISITDATE</Target>
+    <RuleRef OID="R_VISITDATE_ORDER">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Assessment date is earlier than the screening/consent date recorded on the Demographics CRF (the authoritative anchor). Please verify the visit date against source.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_SBP</Target>
+    <RuleRef OID="R_SBP_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Systolic BP is outside the plausible range 80-200 mmHg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_DBP</Target>
+    <RuleRef OID="R_DBP_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Diastolic BP is required but was left empty. Please complete from the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_WEIGHT</Target>
+    <RuleRef OID="R_WEIGHT_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is outside the plausible adult range 30-250 kg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+    <RuleRef OID="R_WEIGHT_BMI">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is inconsistent with the recorded height and site-calculated BMI. Please verify which value matches the source.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_LABS.IG_LABS_UNGROUPED.I_LABS_HGB</Target>
+    <RuleRef OID="R_HGB_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Hemoglobin is outside the plausible range 5-20 g/dL. Please verify the value and unit against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+    <RuleRef OID="R_HGB_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Hemoglobin is required but was left empty. Please complete from the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_LABS.IG_LABS_UNGROUPED.I_LABS_WBC</Target>
+    <RuleRef OID="R_WBC_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>WBC is outside the plausible range 1-50 x10^9/L. Please verify against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT1.F_LABS.IG_LABS_UNGROUPED.I_LABS_CREAT</Target>
+    <RuleRef OID="R_CREAT_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Serum creatinine is outside the plausible range 0.2-10 mg/dL. Please verify the value and decimal placement against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <!-- ========================= SE_VISIT2 assignments ===================== -->
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_VISITDATE</Target>
+    <RuleRef OID="R_VISITDATE_ORDER">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Assessment date is earlier than the screening/consent date recorded on the Demographics CRF (the authoritative anchor). Please verify the visit date against source.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_SBP</Target>
+    <RuleRef OID="R_SBP_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Systolic BP is outside the plausible range 80-200 mmHg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_DBP</Target>
+    <RuleRef OID="R_DBP_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Diastolic BP is required but was left empty. Please complete from the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_VITALS.IG_VITAL_UNGROUPED.I_VITAL_WEIGHT</Target>
+    <RuleRef OID="R_WEIGHT_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is outside the plausible adult range 30-250 kg. Please verify against the source vitals chart.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+    <RuleRef OID="R_WEIGHT_BMI">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Weight is inconsistent with the recorded height and site-calculated BMI. Please verify which value matches the source.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_LABS.IG_LABS_UNGROUPED.I_LABS_HGB</Target>
+    <RuleRef OID="R_HGB_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Hemoglobin is outside the plausible range 5-20 g/dL. Please verify the value and unit against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+    <RuleRef OID="R_HGB_MISSING">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Hemoglobin is required but was left empty. Please complete from the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_LABS.IG_LABS_UNGROUPED.I_LABS_WBC</Target>
+    <RuleRef OID="R_WBC_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>WBC is outside the plausible range 1-50 x10^9/L. Please verify against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <RuleAssignment>
+    <Target Context="OC_RULES_V1">SE_VISIT2.F_LABS.IG_LABS_UNGROUPED.I_LABS_CREAT</Target>
+    <RuleRef OID="R_CREAT_RANGE">
+      <DiscrepancyNoteAction IfExpressionEvaluates="true">
+        <Run AdministrativeDataEntry="true" InitialDataEntry="true"
+             DoubleDataEntry="true" ImportDataEntry="true" Batch="true"/>
+        <Message>Serum creatinine is outside the plausible range 0.2-10 mg/dL. Please verify the value and decimal placement against the central lab report.</Message>
+      </DiscrepancyNoteAction>
+    </RuleRef>
+  </RuleAssignment>
+
+  <!-- ============================== RuleDefs ============================= -->
+  <!-- Range rules: relational operators on an empty value raise an internal
+       exception and the rule is skipped for that subject, so these are safe
+       when the item is absent; emptiness is caught by the eq "" rules. -->
+
+  <RuleDef OID="R_SBP_RANGE" Name="SBP plausible range 80-200">
+    <Description>Systolic BP outside 80-200 mmHg.</Description>
+    <Expression>(I_VITAL_SBP lt 80) or (I_VITAL_SBP gt 200)</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_WEIGHT_RANGE" Name="Weight plausible range 30-250">
+    <Description>Adult body weight outside 30-250 kg.</Description>
+    <Expression>(I_VITAL_WEIGHT lt 30) or (I_VITAL_WEIGHT gt 250)</Expression>
+  </RuleDef>
+
+  <!-- Cross-field consistency: computed BMI = weight_kg * 10000 / height_cm^2.
+       Tolerance +/-3 kg/m2: clean seed subjects sit within 0.3 of their
+       recorded BMI, decimal-shift weights land orders of magnitude outside.
+       If BMI or height is absent the arithmetic raises and the rule is
+       skipped (no false positive on the unresolvable no-BMI subject). -->
+  <RuleDef OID="R_WEIGHT_BMI" Name="Weight vs BMI consistency">
+    <Description>Recorded weight disagrees with site-calculated BMI and height by more than 3 kg/m2.</Description>
+    <Expression>(I_VITAL_WEIGHT * 10000 / (I_VITAL_HEIGHT * I_VITAL_HEIGHT) gt I_VITAL_BMI + 3) or (I_VITAL_WEIGHT * 10000 / (I_VITAL_HEIGHT * I_VITAL_HEIGHT) lt I_VITAL_BMI - 3)</Expression>
+  </RuleDef>
+
+  <!-- Cross-event date order. The right-hand operand is a FULL path into
+       SE_SCREENING and resolves from the DB - seed.py imports Screening in a
+       separate, earlier SOAP call so this is populated when visit events are
+       imported. The left-hand operand is partial and resolves relative to
+       each assignment's target (works for both SE_VISIT1 and SE_VISIT2). -->
+  <RuleDef OID="R_VISITDATE_ORDER" Name="Visit date before screening date">
+    <Description>Assessment date precedes the screening/consent date on the Screening Demographics CRF.</Description>
+    <Expression>I_VITAL_VISITDATE lt SE_SCREENING.F_DEMOG.IG_DEMOG_UNGROUPED.I_DEMOG_SCREENDATE</Expression>
+  </RuleDef>
+
+  <!-- Empty-field rules. seed.py imports the planted-missing items with an
+       explicit empty Value="" so an item_data row exists for the note to
+       attach to (the ws import accepts blank values; blanks skip the
+       type/width hard checks). -->
+  <RuleDef OID="R_DBP_MISSING" Name="DBP missing">
+    <Description>Diastolic BP left empty although required.</Description>
+    <Expression>I_VITAL_DBP eq ""</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_SEX_MISSING" Name="Sex missing">
+    <Description>Sex left empty although required.</Description>
+    <Expression>I_DEMOG_SEX eq ""</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_HGB_MISSING" Name="Hemoglobin missing">
+    <Description>Hemoglobin left empty although required.</Description>
+    <Expression>I_LABS_HGB eq ""</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_HGB_RANGE" Name="Hemoglobin plausible range 5-20">
+    <Description>Hemoglobin outside 5-20 g/dL (unit or decimal shift suspected).</Description>
+    <Expression>(I_LABS_HGB lt 5) or (I_LABS_HGB gt 20)</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_WBC_RANGE" Name="WBC plausible range 1-50">
+    <Description>WBC outside 1-50 x10^9/L.</Description>
+    <Expression>(I_LABS_WBC lt 1) or (I_LABS_WBC gt 50)</Expression>
+  </RuleDef>
+
+  <RuleDef OID="R_CREAT_RANGE" Name="Creatinine plausible range 0.2-10">
+    <Description>Serum creatinine outside 0.2-10 mg/dL (decimal shift suspected).</Description>
+    <Expression>(I_LABS_CREAT lt 0.2) or (I_LABS_CREAT gt 10)</Expression>
+  </RuleDef>
+
+</RuleImport>
